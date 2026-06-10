@@ -4,7 +4,16 @@
 // the panel before the scene is built.
 import { Body, randomColor } from './physics'
 import type { StarSubtype, PlanetSubtype } from './types'
-import { EARTH_PER_RAW, AU_M, LY_M, DAY_S, YEAR_S, displayToRaw, SUBTYPE_DEFAULT_MASS, secondsPerSimTime } from './units'
+import {
+    EARTH_PER_RAW,
+    AU_M,
+    LY_M,
+    DAY_S,
+    YEAR_S,
+    displayToRaw,
+    SUBTYPE_DEFAULT_MASS,
+    secondsPerSimTime,
+} from './units'
 
 export type PresetName = 'binary' | 'solar' | 'cluster' | 'collision'
 
@@ -80,8 +89,8 @@ export const presets: PresetFactories = {
         const v2 = (rawA / M) * vrel
 
         const bodies = [
-            new Body({ x: -r1, y: 0, vx: 0, vy: -v1, mass: rawA, type: 'star', subtype: o.starA }),
-            new Body({ x: r2, y: 0, vx: 0, vy: v2, mass: rawB, type: 'star', subtype: o.starB }),
+            new Body({ x: -r1, y: 0, vx: 0, vy: -v1, mass: rawA, type: 'star', subType: o.starA }),
+            new Body({ x: r2, y: 0, vx: 0, vy: v2, mass: rawB, type: 'star', subType: o.starB }),
         ]
 
         // Frame so the larger star spans ~20 px; pace so an orbit takes ~8 s.
@@ -96,18 +105,38 @@ export const presets: PresetFactories = {
 
     cluster: (_G, o) => {
         const bodies: Body[] = []
+        // Any star class (main-sequence or evolved) can appear alongside planets.
+        const STAR_TYPES: StarSubtype[] = [...MAIN_SEQUENCE, ...EVOLVED_STARS]
+        const MIN_SEP = 45 // px between body centres
+        const placed: { x: number; y: number }[] = []
         for (let i = 0; i < o.count; i++) {
-            const ang = Math.random() * Math.PI * 2
-            const rad = Math.random() * 280 + 20
+            // Rejection-sample positions so bodies start with breathing room;
+            // after a few misses keep the last candidate (dense, large counts).
+            let x = 0
+            let y = 0
+            for (let attempt = 0; attempt < 20; attempt++) {
+                const ang = Math.random() * Math.PI * 2
+                const rad = Math.random() * 420 + 40
+                x = Math.cos(ang) * rad
+                y = Math.sin(ang) * rad
+                if (placed.every((p) => (p.x - x) ** 2 + (p.y - y) ** 2 >= MIN_SEP * MIN_SEP)) break
+            }
+            placed.push({ x, y })
+
+            const isStar = Math.random() < 0.35
+            const subType = isStar ? STAR_TYPES[(Math.random() * STAR_TYPES.length) | 0] : undefined
             bodies.push(
                 new Body({
-                    x: Math.cos(ang) * rad,
-                    y: Math.sin(ang) * rad,
+                    x,
+                    y,
                     vx: (Math.random() - 0.5) * 300,
                     vy: (Math.random() - 0.5) * 300,
-                    mass: Math.random() * 80 + 15,
-                    type: 'planet',
-                    color: randomColor(),
+                    // Stars get their class's canonical mass (±20%); planets keep
+                    // the original light masses.
+                    mass: subType ? starRaw(subType) * (0.8 + Math.random() * 0.4) : Math.random() * 80 + 15,
+                    type: isStar ? 'star' : 'planet',
+                    subType,
+                    color: isStar ? undefined : randomColor(),
                 }),
             )
         }
@@ -159,6 +188,14 @@ export const presets: PresetFactories = {
             let enclosed = coreMass
             for (const s of stars) {
                 const v = Math.sqrt((G * enclosed) / s.rad)
+
+                // Small chance to convert star to an evolved star
+                let subType: StarSubtype | undefined
+                if (Math.random() < 0.05) {
+                    subType = EVOLVED_STARS[(Math.random() * EVOLVED_STARS.length) | 0]
+                    s.mass = starRaw(subType)
+                }
+
                 enclosed += s.mass // mass interior to the next (larger-radius) star
                 bodies.push(
                     new Body({
@@ -168,6 +205,7 @@ export const presets: PresetFactories = {
                         vy: vy + Math.cos(s.ang) * v,
                         mass: s.mass,
                         type: 'star',
+                        subType,
                         color: pick(palette),
                     }),
                 )
@@ -184,7 +222,7 @@ export const presets: PresetFactories = {
 
 // ---- Solar-system variants ------------------------------------------------
 const ourSystem = (G: number): PresetScene => {
-    const sun = new Body({ x: 0, y: 0, mass: 2400, type: 'star', subtype: 'G', color: '#ffd27a' }) // 1 M☉
+    const sun = new Body({ x: 0, y: 0, mass: 2400, type: 'star', subType: 'G', color: '#ffd27a' }) // 1 M☉
     const bodies: Body[] = [sun]
 
     // The eight planets at their real semi-major axes (AU) and masses (M⊕). Inner
@@ -201,7 +239,7 @@ const ourSystem = (G: number): PresetScene => {
         { a: 30.07, mass: 17.15, color: '#4f6fd9' }, // Neptune
     ]
     const KNEE_AU = 1.6
-    const OUTER_COMPRESS = 0.07
+    const OUTER_COMPRESS = 0.12
     const displayAU = (a: number) => (a <= KNEE_AU ? a : KNEE_AU + (a - KNEE_AU) * OUTER_COMPRESS)
 
     planets.forEach((p, i) => {
@@ -226,20 +264,20 @@ const ourSystem = (G: number): PresetScene => {
 const randomSystem = (G: number): PresetScene => {
     const starType = randomStarType()
     const starMass = starRaw(starType)
-    const star = new Body({ x: 0, y: 0, mass: starMass, type: 'star', subtype: starType })
+    const star = new Body({ x: 0, y: 0, mass: starMass, type: 'star', subType: starType })
     const bodies: Body[] = [star]
 
     const count = 2 + ((Math.random() * 14) | 0) // 2–15 planets
     const PX_PER_AU = 100
     const innerR = 55
-    const step = (350 - innerR) / Math.max(1, count) // evenly spread 55–350 px
+    const step = (400 - innerR) / Math.max(1, count) // evenly spread 55–350 px
 
     for (let i = 0; i < count; i++) {
-        const r = innerR + i * step + (Math.random() - 0.5) * step * 0.4
+        const r = innerR + i * step + (Math.random() - 0.5) * step * 0.8
         const ang = i * GOLDEN
         const v = orbitalSpeed(G, starMass, r)
         const gas = Math.random() < 0.3
-        const subtype: PlanetSubtype = gas ? 'gasGiant' : 'terrestrial'
+        const subType: PlanetSubtype = gas ? 'gasGiant' : 'terrestrial'
         const massE = gas ? 10 + Math.random() * 290 : 0.1 + Math.random() * 3 // M⊕
         bodies.push(
             new Body({
@@ -249,7 +287,7 @@ const randomSystem = (G: number): PresetScene => {
                 vy: Math.cos(ang) * v,
                 mass: massE / EARTH_PER_RAW,
                 type: 'planet',
-                subtype,
+                subType,
             }),
         )
     }

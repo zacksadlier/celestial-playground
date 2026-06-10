@@ -60,9 +60,9 @@ const Panel = (props: PanelProps) => {
                         value={props.newBody.type}
                         onChange={(e) => {
                             const type = e.currentTarget.value as BodyType
-                            const subtype = defaultSubtypeForType(type)
-                            const mass = subtype ? SUBTYPE_DEFAULT_MASS[subtype] : MASS_RANGES[type].default
-                            props.setNewBody({ type, subtype, mass })
+                            const subType = defaultSubtypeForType(type)
+                            const mass = subType ? SUBTYPE_DEFAULT_MASS[subType] : MASS_RANGES[type].default
+                            props.setNewBody({ type, subType, mass })
                         }}
                     >
                         <option class='dropdown-option' value='planet'>
@@ -79,12 +79,12 @@ const Panel = (props: PanelProps) => {
 
                 <Show when={props.newBody.type !== 'blackhole'}>
                     <label class='row'>
-                        <span>Subtype</span>
+                        <span>subType</span>
                         <select
-                            value={props.newBody.subtype ?? ''}
+                            value={props.newBody.subType ?? ''}
                             onChange={(e) => {
-                                const subtype = e.currentTarget.value as BodySubtype
-                                props.setNewBody({ subtype, mass: SUBTYPE_DEFAULT_MASS[subtype] })
+                                const subType = e.currentTarget.value as BodySubtype
+                                props.setNewBody({ subType, mass: SUBTYPE_DEFAULT_MASS[subType] })
                             }}
                         >
                             <For each={subtypesForType(props.newBody.type)}>
@@ -150,7 +150,10 @@ const Panel = (props: PanelProps) => {
                         step='0.001'
                         value={speedToSlider(props.settings.speed, maxStableSpeed(props.scale()))}
                         onInput={(e) =>
-                            props.setSettings('speed', sliderToSpeed(+e.currentTarget.value, maxStableSpeed(props.scale())))
+                            props.setSettings(
+                                'speed',
+                                sliderToSpeed(+e.currentTarget.value, maxStableSpeed(props.scale())),
+                            )
                         }
                     />
                     <output>{formatSpeed(props.settings.speed)}</output>

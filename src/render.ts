@@ -12,7 +12,7 @@ export interface DragState {
     sy: number
     mass: number
     type: BodyType
-    subtype: BodySubtype | undefined
+    subType: BodySubtype | undefined
     vLabel: string // formatted launch velocity, shown while dragging
     lastX: number
     lastY: number
@@ -34,9 +34,6 @@ interface Star {
     a: number
 }
 
-let starfield: Star[] = []
-let starKey = ''
-
 const buildStarfield = (w: number, h: number): Star[] => {
     const stars: Star[] = []
     const count = Math.floor((w * h) / 6000)
@@ -51,6 +48,37 @@ const buildStarfield = (w: number, h: number): Star[] => {
     return stars
 }
 
+// Background gradient + starfield are static for a given canvas size, so they
+// are rendered once into an offscreen canvas and blitted each frame.
+let bgCanvas: HTMLCanvasElement | null = null
+let bgKey = ''
+
+const buildBackground = (w: number, h: number, deviceW: number, deviceH: number): HTMLCanvasElement => {
+    const c = document.createElement('canvas')
+    // Device resolution keeps the stars crisp on high-DPI displays; drawing
+    // happens in CSS-pixel coordinates via the transform.
+    c.width = deviceW
+    c.height = deviceH
+    const ctx = c.getContext('2d')!
+    ctx.setTransform(deviceW / w, 0, 0, deviceH / h, 0, 0)
+
+    const g = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.75)
+    g.addColorStop(0, '#0a0e1f')
+    g.addColorStop(1, '#04050b')
+    ctx.fillStyle = g
+    ctx.fillRect(0, 0, w, h)
+
+    ctx.fillStyle = '#cdd6ff'
+    for (const s of buildStarfield(w, h)) {
+        ctx.globalAlpha = s.a
+        ctx.beginPath()
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
+        ctx.fill()
+    }
+    ctx.globalAlpha = 1
+    return c
+}
+
 export const drawScene = (
     ctx: CanvasRenderingContext2D,
     sim: Simulation,
@@ -59,33 +87,39 @@ export const drawScene = (
 ): void => {
     const { w, h } = sim.view
 
-    // Background gradient + parallax-free starfield.
+    // Background gradient + parallax-free starfield (cached offscreen).
+    const key = `${ctx.canvas.width}x${ctx.canvas.height}`
+    if (key !== bgKey || !bgCanvas) {
+        bgCanvas = buildBackground(w, h, ctx.canvas.width, ctx.canvas.height)
+        bgKey = key
+    }
     ctx.clearRect(0, 0, w, h)
-    const g = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.75)
-    g.addColorStop(0, '#0a0e1f')
-    g.addColorStop(1, '#04050b')
-    ctx.fillStyle = g
-    ctx.fillRect(0, 0, w, h)
+    ctx.drawImage(bgCanvas, 0, 0, w, h)
 
-    const key = `${w}x${h}`
-    if (key !== starKey) {
-        starfield = buildStarfield(w, h)
-        starKey = key
-    }
-    for (const s of starfield) {
-        ctx.globalAlpha = s.a
-        ctx.fillStyle = '#cdd6ff'
-        ctx.beginPath()
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
-        ctx.fill()
-    }
-    ctx.globalAlpha = 1
+    // Viewport in world coordinates, for culling trails wholly offscreen.
+    const [vx0, vy0] = sim.toWorld(0, 0)
+    const [vx1, vy1] = sim.toWorld(w, h)
 
     // Trails.
     if (sim.settings.trails) {
         for (const b of sim.bodies) {
             const t = b.trail
             if (t.length < 4) continue
+            // Cheap bounding-box scan: skip the path build + stroke when no
+            // part of the trail can intersect the view. Padded by the stroke
+            // width in world units so partially visible strokes survive.
+            let minX = Infinity,
+                maxX = -Infinity,
+                minY = Infinity,
+                maxY = -Infinity
+            for (let i = 0; i < t.length; i += 2) {
+                if (t[i] < minX) minX = t[i]
+                if (t[i] > maxX) maxX = t[i]
+                if (t[i + 1] < minY) minY = t[i + 1]
+                if (t[i + 1] > maxY) maxY = t[i + 1]
+            }
+            const pad = Math.max(1, b.worldRadius(sim.metersPerPixel) * sim.cam.zoom * 0.35) / sim.cam.zoom
+            if (maxX < vx0 - pad || minX > vx1 + pad || maxY < vy0 - pad || minY > vy1 + pad) continue
             ctx.strokeStyle = b.color
             ctx.lineWidth = Math.max(1, b.worldRadius(sim.metersPerPixel) * sim.cam.zoom * 0.35)
             ctx.lineCap = 'round'
@@ -104,10 +138,13 @@ export const drawScene = (
         }
     }
 
-    // Bodies.
+    // Bodies. Culled against the viewport with the widest glow halo (3r,
+    // black holes) as margin, so glows from just-offscreen bodies still show.
     for (const b of sim.bodies) {
         const [sx, sy] = sim.toScreen(b.x, b.y)
         const r = Math.max(1, b.worldRadius(sim.metersPerPixel) * sim.cam.zoom)
+        const m = r * 3
+        if (sx + m < 0 || sx - m > w || sy + m < 0 || sy - m > h) continue
         drawBody(ctx, b, sx, sy, r)
     }
 
@@ -184,6 +221,16 @@ const drawBody = (ctx: CanvasRenderingContext2D, b: Body, sx: number, sy: number
         return
     }
 
+    // At a few pixels across, the glow and shading gradients are invisible —
+    // a flat disc looks the same and skips two createRadialGradient calls.
+    if (r <= 2.5) {
+        ctx.fillStyle = b.color
+        ctx.beginPath()
+        ctx.arc(sx, sy, r, 0, Math.PI * 2)
+        ctx.fill()
+        return
+    }
+
     // Stars and planets: radial body + outer glow.
     const glowR = kind === 'star' ? r * 2.6 : r * 1.5
     const glow = ctx.createRadialGradient(sx, sy, r * 0.4, sx, sy, glowR)
@@ -212,7 +259,7 @@ const drawDragPreview = (ctx: CanvasRenderingContext2D, sim: Simulation, drag: D
     const ey = drag.sy
 
     // Ghost body sized by the chosen mass at the current length scale.
-    const rm = physicalRadiusMeters(drag.mass, drag.type, drag.subtype)
+    const rm = physicalRadiusMeters(drag.mass, drag.type, drag.subType)
     const r = worldRadius(rm, sim.metersPerPixel) * sim.cam.zoom
     ctx.strokeStyle = '#ffffff99'
     ctx.fillStyle = '#ffffff1f'

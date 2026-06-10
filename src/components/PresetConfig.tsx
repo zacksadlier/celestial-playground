@@ -1,4 +1,5 @@
 import { Show, For } from 'solid-js'
+import { Upload } from 'lucide-solid'
 import type { SetStoreFunction } from 'solid-js/store'
 import type { PresetName, PresetOptions } from '../presets'
 import type { StarSubtype } from '../types'
@@ -100,7 +101,7 @@ const PresetConfig = (props: PresetConfigProps) => {
             </Show>
 
             <button class='start-btn' onClick={() => props.onStart()}>
-                ▶ Start
+                <Upload size={14} /> Load Preset
             </button>
         </div>
     )

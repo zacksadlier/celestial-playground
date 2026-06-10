@@ -74,8 +74,7 @@ body {
     color: var(--muted);
 }
 
-#info-btn {
-    margin-left: auto;
+.icon-btn {
     pointer-events: auto;
     width: 30px;
     height: 30px;
@@ -90,17 +89,23 @@ body {
     border-radius: 50%;
     backdrop-filter: blur(12px);
     cursor: pointer;
+    text-decoration: none;
     transition:
         color 0.15s,
         border-color 0.15s,
         transform 0.1s;
 }
-#info-btn:hover {
+.icon-btn:hover {
     color: var(--accent);
     border-color: var(--accent);
 }
-#info-btn:active {
+.icon-btn:active {
     transform: scale(0.92);
+}
+
+/* First icon in the right-hand group pushes the cluster to the edge. */
+#github-btn {
+    margin-left: auto;
 }
 
 /* ---------- Info modal ---------- */
@@ -348,6 +353,10 @@ input[type='checkbox'] {
     line-height: 1.4;
 }
 .start-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
     width: 100%;
     margin-top: 4px;
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
@@ -442,6 +451,9 @@ input[type='checkbox'] {
 }
 
 #toolbar button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     background: #ffffff0d;
     border: 1px solid var(--panel-border);
     color: var(--text);
@@ -454,6 +466,9 @@ input[type='checkbox'] {
         transform 0.1s;
     white-space: nowrap;
 }
+#toolbar button.icon-only {
+    padding: 8px;
+}
 #toolbar button:hover {
     background: #ffffff1f;
 }
@@ -461,9 +476,12 @@ input[type='checkbox'] {
     transform: scale(0.95);
 }
 #toolbar button.primary {
+    display: flex;
+    justify-content: center;
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
     border-color: transparent;
     color: #0a0c16;
+    width: 100px;
     font-weight: 600;
 }
 #toolbar button.active {

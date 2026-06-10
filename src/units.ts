@@ -32,7 +32,7 @@ export const YEAR_S = 365.25 * DAY_S
 const C_MS = 2.99792458e8 // speed of light
 
 // Adjustable length scale: metres represented by one pixel (at zoom 1).
-export const SCALE_RANGE = { min: 1e6, max: 1e20, default: AU_M }
+export const SCALE_RANGE = { min: 1e6, max: 1000 * LY_M, default: AU_M }
 
 // Playback speed = seconds of simulated time advanced per real second.
 // The minimum and default are fixed; the maximum is scale-dependent (see
@@ -43,6 +43,12 @@ export const SPEED_RANGE = { min: 1, default: 50 * YEAR_S }
 // at most MAX_SUBSTEP_DT of sim-time; a frame uses at most MAX_SUBSTEPS of them.
 export const MAX_SUBSTEP_DT = 0.1
 export const MAX_SUBSTEPS = 400
+
+// Safety factor on the dynamical time of the most strongly-interacting pair.
+// The actual substep is shrunk to STABILITY_ETA · t_dyn when massive bodies get
+// close, so a step never crosses much of a tight orbit (which would make the
+// integrator fling bodies past each other instead of binding them).
+export const STABILITY_ETA = 0.15
 
 // Fastest playback (sim-seconds per real second) that stays stable at a given
 // length scale, assuming ~60 fps. Beyond this a frame would need more than
@@ -71,8 +77,8 @@ const MIN_WORLD_RADIUS = 1.5
 const FLOOR_BOOST_ORDERS = 3.5 // boost applies within this many orders of magnitude of the floor
 const FLOOR_BOOST_GAIN = 2 // extra pixels of floor per order of magnitude within that window
 
-// A body's true physical radius in metres, from its mass, type, and subtype.
-export const physicalRadiusMeters = (massRaw: number, type: BodyType, subtype?: BodySubtype): number => {
+// A body's true physical radius in metres, from its mass, type, and subType.
+export const physicalRadiusMeters = (massRaw: number, type: BodyType, subType?: BodySubtype): number => {
     const kg = massRaw * KG_PER_RAW
     // Black holes: event-horizon (Schwarzschild) radius.
     if (type === 'blackhole') return (2 * G_SI * kg) / (C_MS * C_MS)
@@ -80,8 +86,8 @@ export const physicalRadiusMeters = (massRaw: number, type: BodyType, subtype?: 
     // dwarf, red giant, neutron star) have their own density so their radius
     // is decoupled from the main-sequence mass-radius relation.
     let density: number
-    if (subtype && subtype in EVOLVED_STAR_DENSITY) {
-        density = EVOLVED_STAR_DENSITY[subtype as EvolvedStar]
+    if (subType && subType in EVOLVED_STAR_DENSITY) {
+        density = EVOLVED_STAR_DENSITY[subType as EvolvedStar]
     } else {
         density = type === 'star' ? STAR_DENSITY : PLANET_DENSITY
     }
@@ -114,6 +120,11 @@ export const secondsPerSimTime = (metersPerPixel: number): number => {
 // Conversion of a sim velocity (pixels / sim-time) into metres per second.
 const metersPerSecondPerSimVel = (metersPerPixel: number): number => {
     return metersPerPixel / secondsPerSimTime(metersPerPixel)
+}
+
+// The speed of light expressed as a sim velocity at the given length scale.
+export const lightSpeedSimVel = (metersPerPixel: number): number => {
+    return C_MS / metersPerSecondPerSimVel(metersPerPixel)
 }
 
 export const scaleToSlider = (metersPerPixel: number): number => {
@@ -174,25 +185,25 @@ export const typeLabel = (type: BodyType): string => {
     return type === 'blackhole' ? 'Black hole' : type[0].toUpperCase() + type.slice(1)
 }
 
-// Human-readable label including the subtype, e.g. 'Gas giant', 'G-type star',
+// Human-readable label including the subType, e.g. 'Gas giant', 'G-type star',
 // 'White dwarf'. Single-letter subtypes are main-sequence spectral classes.
-export const subtypeLabel = (type: BodyType, subtype: BodySubtype | undefined): string => {
-    if (type === 'planet') return subtype === 'gasGiant' ? 'Gas giant' : 'Terrestrial planet'
+export const subtypeLabel = (type: BodyType, subType: BodySubtype | undefined): string => {
+    if (type === 'planet') return subType === 'gasGiant' ? 'Gas giant' : 'Terrestrial planet'
     if (type === 'star') {
-        if (!subtype) return 'Star'
-        return subtype.length === 1 ? `${subtype}-type star` : subtypeShortLabel(subtype)
+        if (!subType) return 'Star'
+        return subType.length === 1 ? `${subType}-type star` : subtypeShortLabel(subType)
     }
     return 'Black hole'
 }
 
-// ---- Subtype selection (New Body panel) -----------------------------------
+// ---- subType selection (New Body panel) -----------------------------------
 const PLANET_SUBTYPES: PlanetSubtype[] = ['terrestrial', 'gasGiant']
 const STAR_SUBTYPES: StarSubtype[] = ['O', 'B', 'A', 'F', 'G', 'K', 'M', 'whiteDwarf', 'redGiant', 'neutronStar']
 
 export const subtypesForType = (type: BodyType): BodySubtype[] =>
     type === 'planet' ? PLANET_SUBTYPES : type === 'star' ? STAR_SUBTYPES : []
 
-// Default mass for each subtype, in that type's display unit (M⊕ / M☉).
+// Default mass for each subType, in that type's display unit (M⊕ / M☉).
 export const SUBTYPE_DEFAULT_MASS: Record<BodySubtype, number> = {
     terrestrial: 1, // M⊕
     gasGiant: 25, // M⊕
@@ -224,7 +235,7 @@ const SUBTYPE_SHORT: Record<BodySubtype, string> = {
 }
 export const subtypeShortLabel = (s: BodySubtype): string => SUBTYPE_SHORT[s]
 
-// Subtype to select when switching to a body type (black holes have none).
+// subType to select when switching to a body type (black holes have none).
 export const defaultSubtypeForType = (type: BodyType): BodySubtype | undefined =>
     type === 'planet' ? 'terrestrial' : type === 'star' ? 'G' : undefined
 
@@ -264,6 +275,19 @@ export const formatEnergy = (rawKE: number, metersPerPixel: number): string => {
     return Math.round(joules) + ' J'
 }
 
+// Newtonian attraction between two bodies (pairwise only), in newtons.
+export const gravitationalForceN = (massRawA: number, massRawB: number, distMeters: number): number => {
+    if (distMeters <= 0) return 0
+    return (G_SI * massRawA * KG_PER_RAW * (massRawB * KG_PER_RAW)) / Math.pow(distMeters, 2)
+}
+
+export const formatForce = (newtons: number): string => {
+    if (newtons === 0) return '0 N'
+    if (newtons >= 1e4 || newtons < 1e-2) return newtons.toExponential(2) + ' N'
+    if (newtons >= 1e3) return (newtons / 1e3).toFixed(1) + ' kN'
+    return newtons.toFixed(newtons >= 10 ? 0 : 2) + ' N'
+}
+
 // Playback speed expressed as simulated time elapsed per real second.
 export const formatSpeed = (realSecondsPerSecond: number): string => {
     return formatDuration(realSecondsPerSecond) + '/s'
@@ -272,7 +296,7 @@ export const formatSpeed = (realSecondsPerSecond: number): string => {
 // Velocity magnitude in real units (m/s, km/s, or fraction of c).
 export const formatVelocity = (vSim: number, metersPerPixel: number): string => {
     const mps = vSim * metersPerSecondPerSimVel(metersPerPixel)
-    if (mps >= 0.01 * C_MS) return (mps / C_MS).toFixed(4) + ' c'
+    if (mps >= 0.01 * C_MS) return Math.min(1, mps / C_MS).toFixed(4) + ' c'
     if (mps >= 1e3) return (mps / 1e3).toFixed(mps >= 1e6 ? 0 : 1) + ' km/s'
     return mps.toFixed(1) + ' m/s'
 }

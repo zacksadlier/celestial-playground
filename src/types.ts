@@ -22,7 +22,7 @@ export interface BodyOptions {
     mass?: number
     color?: string
     type?: BodyType
-    subtype?: BodySubtype
+    subType?: BodySubtype
     haloMass?: number
 }
 
@@ -45,7 +45,7 @@ export interface Camera {
 export interface NewBodyConfig {
     mass: number
     type: BodyType
-    subtype: BodySubtype | undefined
+    subType: BodySubtype | undefined
     randomColor: boolean
 }
 

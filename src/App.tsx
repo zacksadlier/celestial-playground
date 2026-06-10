@@ -12,14 +12,17 @@ import {
     formatVelocity,
     subtypeLabel,
     formatLength,
+    formatForce,
+    gravitationalForceN,
     SCALE_RANGE,
     SPEED_RANGE,
     secondsPerSimTime,
+    lightSpeedSimVel,
     maxStableSpeed,
-    MAX_SUBSTEP_DT,
     MAX_SUBSTEPS,
 } from './units'
 import type { SimSettings, NewBodyConfig, Stats, Actions, TooltipInfo } from './types'
+import { Info } from 'lucide-solid'
 import Panel from './components/Panel'
 import Toolbar from './components/Toolbar'
 import InfoModal from './components/InfoModal'
@@ -41,7 +44,7 @@ const App = () => {
     const [newBody, setNewBody] = createStore<NewBodyConfig>({
         mass: 1,
         type: 'planet',
-        subtype: 'terrestrial',
+        subType: 'terrestrial',
         randomColor: true,
     })
     const [running, setRunning] = createSignal(true)
@@ -85,7 +88,7 @@ const App = () => {
         sy: 0,
         mass: 60,
         type: 'planet',
-        subtype: 'terrestrial',
+        subType: 'terrestrial',
         vLabel: '',
         lastX: 0,
         lastY: 0,
@@ -97,7 +100,16 @@ const App = () => {
     // comparable to the scene's own bodies, which are paced the same way.
     const launchVelocity = (ex: number, ey: number): { vx: number; vy: number } => {
         const k = (VELOCITY_SCALE * secondsPerSimTime(sim.metersPerPixel)) / settings.speed
-        return { vx: (ex - drag.wx) * k, vy: (ey - drag.wy) * k }
+        let vx = (ex - drag.wx) * k
+        let vy = (ey - drag.wy) * k
+        // Cap the launch at the speed of light.
+        const vMax = lightSpeedSimVel(sim.metersPerPixel)
+        const v = Math.hypot(vx, vy)
+        if (v > vMax) {
+            vx *= vMax / v
+            vy *= vMax / v
+        }
+        return { vx, vy }
     }
 
     // Measure-mode ruler state (world coords; off the reactive graph).
@@ -150,7 +162,10 @@ const App = () => {
             measure.y1 = my
         }
         const dist = Math.hypot(measure.x1 - measure.x0, measure.y1 - measure.y0)
-        measure.label = formatLength(dist * sim.metersPerPixel)
+        const distM = dist * sim.metersPerPixel
+        measure.label = formatLength(distM)
+        // With both endpoints on bodies, also show their mutual gravitational pull.
+        if (b) measure.label += `  |  ${formatForce(gravitationalForceN(a.mass, b.mass, distM))}`
     }
 
     // Latest cursor position, used to hit-test bodies for the hover tooltip.
@@ -187,7 +202,7 @@ const App = () => {
         const hasHalo = isBlackHole(b) && b.haloMass > 0
         const ownMass = hasHalo ? b.mass - b.haloMass : b.mass
         setTooltip({
-            label: subtypeLabel(b.type, b.subtype),
+            label: subtypeLabel(b.type, b.subType),
             mass: formatMass(rawToDisplay(ownMass, b.type), b.type),
             halo: hasHalo ? formatMass(rawToDisplay(b.haloMass, b.type), b.type) : undefined,
             velocity: formatVelocity(Math.hypot(b.vx, b.vy), metersPerPixel()),
@@ -210,10 +225,15 @@ const App = () => {
     const advance = (simSeconds: number): void => {
         let dtSim = simSeconds / secondsPerSimTime(metersPerPixel())
         if (dtSim <= 0) return
-        let substeps = Math.ceil(dtSim / MAX_SUBSTEP_DT)
+        // Size the substep to the scene's dynamics: when massive bodies are close
+        // their orbit needs a far finer step than MAX_SUBSTEP_DT, otherwise they
+        // fly past instead of binding. Heavy scenes therefore hit the substep cap
+        // sooner and advance more slowly (in real time) but stay stable.
+        const stableDt = sim.maxStableDt()
+        let substeps = Math.ceil(dtSim / stableDt)
         if (substeps > MAX_SUBSTEPS) {
             substeps = MAX_SUBSTEPS
-            dtSim = substeps * MAX_SUBSTEP_DT // clamp the total to what we can stably integrate
+            dtSim = substeps * stableDt // clamp the total to what we can stably integrate
         }
         const sub = dtSim / substeps
         for (let i = 0; i < substeps; i++) sim.step(sub)
@@ -321,7 +341,7 @@ const App = () => {
         drag.sy = e.clientY
         drag.mass = displayToRaw(newBody.mass, newBody.type)
         drag.type = newBody.type
-        drag.subtype = newBody.subtype
+        drag.subType = newBody.subType
     }
 
     const onPointerMove = (e: PointerEvent): void => {
@@ -365,7 +385,7 @@ const App = () => {
                     vy,
                     mass: displayToRaw(newBody.mass, newBody.type),
                     type: newBody.type,
-                    subtype: newBody.subtype,
+                    subType: newBody.subType,
                     color: newBody.randomColor ? randomColor() : undefined,
                 }),
             )
@@ -501,8 +521,21 @@ const App = () => {
                     <span class='title'>Celestial&nbsp;Playground</span>
                 </div>
                 <div class='hint'>Drag on empty space to launch a body · Scroll to zoom · Right-click to pan</div>
-                <button id='info-btn' title='About &amp; controls' onClick={() => setShowInfo(true)}>
-                    ⓘ
+                <a
+                    id='github-btn'
+                    class='icon-btn'
+                    href='https://github.com/zacksadlier/celestial-playground'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    title='View source on GitHub'
+                    aria-label='View source on GitHub'
+                >
+                    <svg viewBox='0 0 16 16' width='18' height='18' aria-hidden='true' fill='currentColor'>
+                        <path d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z' />
+                    </svg>
+                </a>
+                <button id='info-btn' class='icon-btn' title='About &amp; controls' onClick={() => setShowInfo(true)}>
+                    <Info size={18} />
                 </button>
             </header>
 

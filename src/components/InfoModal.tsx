@@ -1,3 +1,5 @@
+import { X } from 'lucide-solid'
+
 interface InfoModalProps {
     onClose: () => void
 }
@@ -7,7 +9,7 @@ const InfoModal = (props: InfoModalProps) => {
         <div class='modal-backdrop' onClick={() => props.onClose()}>
             <div class='modal' onClick={(e) => e.stopPropagation()}>
                 <button class='modal-close' title='Close' onClick={() => props.onClose()}>
-                    ✕
+                    <X size={18} />
                 </button>
 
                 <h2 class='modal-title'>
@@ -27,7 +29,7 @@ const InfoModal = (props: InfoModalProps) => {
                         <b>Click &amp; drag</b> to launch it, direction and length set the initial velocity.
                     </li>
                     <li>
-                        Pick the <b>type</b>, <b>subtype</b>, and <b>mass</b> in the New Body panel first.
+                        Pick the <b>type</b>, <b>subType</b>, and <b>mass</b> in the New Body panel first.
                     </li>
                 </ul>
 
@@ -54,13 +56,22 @@ const InfoModal = (props: InfoModalProps) => {
                     </li>
                     <li>
                         <b>📏 Measure</b> draws a ruler. Just drag a line or pause and click two bodies.
+                        <ul>
+                            <li>
+                                Clicking two bodies will maintain the line between them even after clicking play. It
+                                will also display the force they exert on each other due to gravitation.
+                            </li>
+                        </ul>
                     </li>
                     <li>
-                        <b>Presets</b> open options, then hit <b>Start</b> to build the scene.
+                        <b>Presets</b> open options, then hit <b>Load Preset</b> to build the scene.
                     </li>
                 </ul>
 
-                <p class='modal-foot'>Everything runs in self-consistent physical units, hover and measure to explore real masses, distances, and speeds.</p>
+                <p class='modal-foot'>
+                    Everything runs in self-consistent physical units, hover and measure to explore real masses,
+                    distances, and speeds.
+                </p>
             </div>
         </div>
     )

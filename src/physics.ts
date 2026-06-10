@@ -1,5 +1,5 @@
 // Gravitational N-body simulation engine — independent of any UI framework.
-import { physicalRadiusMeters, worldRadius, rawToDisplay } from './units'
+import { physicalRadiusMeters, worldRadius, rawToDisplay, MAX_SUBSTEP_DT, STABILITY_ETA } from './units'
 import type {
     BodyType,
     BodyKind,
@@ -12,20 +12,21 @@ import type {
     Camera,
 } from './types'
 
-// Characteristic colour for each subtype (rough; tweak to taste).
-const SUBTYPE_COLORS: Record<BodySubtype, string> = {
-    terrestrial: '#9a8f86', // rocky grey-brown
-    gasGiant: '#e0a868', // tan / orange bands
-    O: '#9bb0ff', // blue
-    B: '#b7c6ff', // blue-white
-    A: '#dbe4ff', // white
-    F: '#f7f4ec', // yellow-white
-    G: '#ffe9a8', // yellow (Sun-like)
-    K: '#ffc079', // orange
-    M: '#ff8a5c', // red-orange
-    whiteDwarf: '#dbe9ff', // hot blue-white
-    redGiant: '#ff6a4a', // cool, luminous red-orange
-    neutronStar: '#bcd4ff', // intense blue-white
+// Characteristic colours for each subType (rough; tweak to taste). Stars get a
+// few slight shade variants so identical classes don't all look the same.
+const SUBTYPE_COLORS: Record<BodySubtype, string[]> = {
+    terrestrial: ['#9a8f86'], // rocky grey-brown
+    gasGiant: ['#e0a868'], // tan / orange bands
+    O: ['#9bb0ff', '#8fa6ff', '#a7baff'], // blue
+    B: ['#b7c6ff', '#aabcff', '#c2cfff'], // blue-white
+    A: ['#dbe4ff', '#d0dbff', '#e4ebff'], // white
+    F: ['#f7f4ec', '#fbf8f1', '#f2ede0'], // yellow-white
+    G: ['#ffe9a8', '#ffe399', '#ffefbc'], // yellow (Sun-like)
+    K: ['#ffc079', '#ffb868', '#ffca8e'], // orange
+    M: ['#ff8a5c', '#ff7e4d', '#ff9870'], // red-orange
+    whiteDwarf: ['#dbe9ff', '#cfe1ff', '#e6f0ff'], // hot blue-white
+    redGiant: ['#ff6a4a', '#ff5c3a', '#ff7a5e'], // cool, luminous red-orange
+    neutronStar: ['#bcd4ff', '#aecbff', '#cadeff'], // intense blue-white
 }
 
 // Mean density (kg/m³) for evolved stars, whose radius is decoupled from mass.
@@ -37,7 +38,10 @@ export const EVOLVED_STAR_DENSITY: Record<EvolvedStar, number> = {
     neutronStar: 5e17,
 }
 
-export const subtypeColor = (subtype: BodySubtype): string => SUBTYPE_COLORS[subtype]
+export const subtypeColor = (subType: BodySubtype): string => {
+    const shades = SUBTYPE_COLORS[subType]
+    return shades[Math.floor(Math.random() * shades.length)]
+}
 
 // Terrestrial below ~10 Earth masses, gas giant above.
 const classifyPlanet = (massRaw: number): PlanetSubtype =>
@@ -55,7 +59,7 @@ const classifyStar = (massRaw: number): StarSubtype => {
     return 'M'
 }
 
-// Default subtype derived from a body's mass (black holes have none).
+// Default subType derived from a body's mass (black holes have none).
 export const defaultSubtype = (type: BodyType, massRaw: number): BodySubtype | undefined => {
     if (type === 'planet') return classifyPlanet(massRaw)
     if (type === 'star') return classifyStar(massRaw)
@@ -99,12 +103,12 @@ export class Body {
     haloMass: number // dark-matter-halo portion of `mass`, shown separately; 0 for normal bodies
     color: string
     type: BodyType
-    subtype: BodySubtype | undefined // composition (planets) / spectral class (stars); none for black holes
+    subType: BodySubtype | undefined // composition (planets) / spectral class (stars); none for black holes
     trail: number[]
     alive: boolean
     radiusMeters: number
 
-    constructor({ x, y, vx = 0, vy = 0, mass = 60, color, type = 'planet', subtype, haloMass = 0 }: BodyOptions) {
+    constructor({ x, y, vx = 0, vy = 0, mass = 60, color, type = 'planet', subType, haloMass = 0 }: BodyOptions) {
         this.id = nextId++
         this.x = x
         this.y = y
@@ -113,13 +117,13 @@ export class Body {
         this.mass = mass
         this.haloMass = haloMass
         this.type = type
-        this.subtype = subtype ?? defaultSubtype(type, mass)
-        // Default colour follows the subtype; falls back to a random palette colour.
-        this.color = color || (this.subtype ? subtypeColor(this.subtype) : randomColor())
+        this.subType = subType ?? defaultSubtype(type, mass)
+        // Default colour follows the subType; falls back to a random palette colour.
+        this.color = color || (this.subType ? subtypeColor(this.subType) : randomColor())
         this.trail = []
         this.alive = true
         // Visible radius reflects only the body's own (non-halo) mass.
-        this.radiusMeters = physicalRadiusMeters(mass - haloMass, type, this.subtype)
+        this.radiusMeters = physicalRadiusMeters(mass - haloMass, type, this.subType)
     }
 
     // On-screen radius (world units / pixels at zoom 1) for the given length scale.
@@ -136,12 +140,12 @@ export class Body {
 // guards below to access the per-type shape (e.g. a black hole's halo mass).
 export interface PlanetBody extends Body {
     type: 'planet'
-    subtype: PlanetSubtype
+    subType: PlanetSubtype
 }
 
 export interface StarBody extends Body {
     type: 'star'
-    subtype: StarSubtype
+    subType: StarSubtype
 }
 
 export interface BlackHoleBody extends Body {
@@ -240,6 +244,34 @@ export class Simulation {
                 b.vy -= (fy / b.mass) * dt
             }
         }
+    }
+
+    // Largest substep (in sim-time) that integrates the current configuration
+    // stably. The dynamical time of a pair is t_dyn ≈ √(r³ / G(mₐ+m_b)); for
+    // massive, close bodies it can be far shorter than MAX_SUBSTEP_DT, and a
+    // step that overshoots it makes semi-implicit Euler slingshot the pair
+    // through each other rather than capturing it into orbit. We take the
+    // tightest pair and back off by STABILITY_ETA, capped at MAX_SUBSTEP_DT for
+    // sparse/light scenes where nothing is demanding.
+    maxStableDt(): number {
+        const { G } = this.settings
+        const bodies = this.bodies
+        const n = bodies.length
+        const soft2 = this.softening * this.softening
+        let minTdyn = Infinity
+        for (let i = 0; i < n; i++) {
+            const a = bodies[i]
+            for (let j = i + 1; j < n; j++) {
+                const b = bodies[j]
+                const dx = b.x - a.x
+                const dy = b.y - a.y
+                const r2 = dx * dx + dy * dy + soft2
+                const tdyn = Math.sqrt((r2 * Math.sqrt(r2)) / (G * (a.mass + b.mass)))
+                if (tdyn < minTdyn) minTdyn = tdyn
+            }
+        }
+        if (!isFinite(minTdyn)) return MAX_SUBSTEP_DT
+        return Math.min(MAX_SUBSTEP_DT, STABILITY_ETA * minTdyn)
     }
 
     recordTrails(): void {
@@ -341,7 +373,7 @@ export class Simulation {
         big.y = (big.y * big.mass + small.y * small.mass) / m
         big.mass = m
         big.haloMass += small.haloMass
-        big.radiusMeters = physicalRadiusMeters(big.mass - big.haloMass, big.type, big.subtype)
+        big.radiusMeters = physicalRadiusMeters(big.mass - big.haloMass, big.type, big.subType)
         small.alive = false
     }
 
