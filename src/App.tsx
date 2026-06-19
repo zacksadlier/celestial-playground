@@ -355,9 +355,6 @@ const App = () => {
         drag.mass = displayToRaw(newBody.mass, newBody.type)
         drag.type = newBody.type
         drag.subType = newBody.subType
-
-        // Clear pinned tooltip on the click
-        setPinned(null)
     }
 
     const onPointerMove = (e: PointerEvent): void => {
@@ -411,7 +408,9 @@ const App = () => {
             // clicking the same body again unpins it, another switches the pin.
             setPinned((prev) => (prev === pressBody ? null : pressBody))
         } else if (!drag.panning) {
-            // A drag, or a click on empty space, in Body mode launches a new body.
+            // A drag, or a click on empty space, in Body mode launches a new body
+            // and dismisses any pinned tooltip.
+            setPinned(null)
             const [ex, ey] = sim.toWorld(e.clientX, e.clientY)
             const { vx, vy } = launchVelocity(ex, ey)
             sim.add(

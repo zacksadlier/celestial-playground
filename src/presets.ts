@@ -114,7 +114,7 @@ export const presets: PresetFactories = {
                 return ourSystem(G)
             default:
                 console.log(`Unknown solar system preset detected: ${o.mode}`)
-                return { bodies: [], metersPerPixel: 0, speed: 0 }
+                return { bodies: [], metersPerPixel: 1, speed: 1 }
         }
     },
     cluster: (_, o) => {
@@ -284,11 +284,12 @@ const ourSystem = (G: number): PresetScene => {
 //
 // The compression can't be arbitrary, though: a hierarchical triple is only
 // stable when the outer orbit sits well outside the inner binary (the
-// Mardling–Aarseth criterion wants a_outer/a_inner ≳ 3 for these masses). So the
-// binary is drawn compact (1 px = ½ AU) and Proxima kept far enough out that the
-// ratio is ~7 - comfortably stable - rather than collapsing the hierarchy.
+// Mardling-Aarseth criterion wants a_outer/a_inner ≳ 3 for these masses). So the
+// binary is drawn at 1 px = 0.2 AU and Proxima kept far enough out (ratio ~3.8)
+// that the hierarchy holds - while still leaving room for A's planet on a stable
+// circumstellar orbit between the two stars.
 const alphaCentauriSystem = (G: number): PresetScene => {
-    const PX_PER_AU = 2
+    const PX_PER_AU = 5
     const bodies: Body[] = []
 
     // Real masses (M☉): A is a G2V star, B a K1V star, Proxima an M5.5V red dwarf.
@@ -309,15 +310,34 @@ const alphaCentauriSystem = (G: number): PresetScene => {
     const rB = (mA / mAB) * rAp
     const vA = (mB / mAB) * vRel
     const vB = (mA / mAB) * vRel
+    const starA = new Body({ x: -rA, y: 0, vx: 0, vy: -vA, mass: mA, type: 'star', subType: 'G', color: '#fff1d0' })
+    const starB = new Body({ x: rB, y: 0, vx: 0, vy: vB, mass: mB, type: 'star', subType: 'K', color: '#ffc079' })
+    bodies.push(starA, starB)
+
+    // Alpha Centauri A's confirmed planet: a gas giant on a ~2 AU orbit around A
+    // (an S-type / circumstellar orbit). It's kept well inside A's stability limit
+    // against B - the Holman-Wiegert critical radius is ~0.12·a_AB here - so the
+    // binary can't strip it; the softened orbital speed keeps it near-circular.
+    const rPlanetA = 10 // px = 2 AU at this scale
+    const angPlanetA = 1.2
+    const vPlanetA = softenedOrbitalSpeed(G, mA, rPlanetA)
     bodies.push(
-        new Body({ x: -rA, y: 0, vx: 0, vy: -vA, mass: mA, type: 'star', subType: 'G', color: '#fff1d0' }),
-        new Body({ x: rB, y: 0, vx: 0, vy: vB, mass: mB, type: 'star', subType: 'K', color: '#ffc079' }),
+        new Body({
+            x: starA.x + Math.cos(angPlanetA) * rPlanetA,
+            y: starA.y + Math.sin(angPlanetA) * rPlanetA,
+            vx: starA.vx - Math.sin(angPlanetA) * vPlanetA,
+            vy: starA.vy + Math.cos(angPlanetA) * vPlanetA,
+            mass: 100 / EARTH_PER_RAW, // ~Saturn-mass gas giant
+            type: 'planet',
+            subType: 'gasGiant',
+            color: '#d6b27a',
+        }),
     )
 
     // Proxima Centauri: gravitationally bound to the A–B pair on a huge, slow orbit
     // (~13,000 AU, ~550,000 yr). Placed on a compressed circular orbit around the
     // barycentre, in the same sense as the binary, so it stays in frame.
-    const rProx = 330
+    const rProx = 450
     const angProx = 0.6 // radians; offset so Proxima sits clear of the binary axis
     const vProx = orbitalSpeed(G, mAB, rProx)
     const px = Math.cos(angProx) * rProx
@@ -334,13 +354,14 @@ const alphaCentauriSystem = (G: number): PresetScene => {
     })
     bodies.push(proxima)
 
-    // Proxima's planets (b and c). Their true orbits (~0.049 and ~1.49 AU) are
-    // sub-pixel at this scale, so they're given exaggerated radii around Proxima
-    // with speeds set for a stable local orbit; b is the famous habitable-zone world.
-    // Radii are kept well inside Proxima's Hill radius (~90 px here) so the A–B
-    // pair can't strip them, and the speed uses the softened form so they stay on
-    // tight, near-circular, bound orbits.
+    // Proxima's planets: d (an unconfirmed ~0.26 M⊕ candidate, innermost), b (the
+    // famous habitable-zone world), and c. Their true orbits (~0.029, ~0.049, and
+    // ~1.49 AU) are sub-pixel at this scale, so they're given exaggerated radii
+    // around Proxima with speeds set for stable local orbits. The radii stay well
+    // inside Proxima's Hill radius (~120 px here) so the A-B pair can't strip them,
+    // and the softened speed keeps them on tight, near-circular, bound orbits.
     const proxPlanets = [
+        { r: 11, massE: 0.26, color: '#c08a72' }, // Proxima d - ~0.26 M⊕ candidate (unconfirmed)
         { r: 18, massE: 1.07, color: '#6ab0ff' }, // Proxima b - ~1.1 M⊕, habitable zone
         { r: 34, massE: 7.0, color: '#b59a7a' }, // Proxima c - ~7 M⊕ super-Earth
     ]
@@ -388,11 +409,11 @@ const alphaCentauriSystem = (G: number): PresetScene => {
         b.vy -= vcy
     }
 
-    // Frame at 1 px = ½ AU; pace so the ~80-year A–B orbit plays in ~15 s. (The
-    // period is set by the real AU and masses, so it stays ~80 yr at any PX_PER_AU.)
+    // Frame at 1 px = 0.2 AU; pace the ~80-year A-B orbit. (The period is set by
+    // the real AU and masses, so it stays ~80 yr at any PX_PER_AU.)
     const metersPerPixel = AU_M / PX_PER_AU
     const periodSim = 2 * Math.PI * Math.sqrt(aAB ** 3 / (G * mAB))
-    const speed = (periodSim * secondsPerSimTime(metersPerPixel)) / 4
+    const speed = (periodSim * secondsPerSimTime(metersPerPixel)) / 15
     return { bodies, metersPerPixel, speed }
 }
 
