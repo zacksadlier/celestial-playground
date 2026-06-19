@@ -1,7 +1,7 @@
 // Canvas rendering for the simulation. Pure draw logic, no state of its own.
 import type { Body, Simulation } from './physics'
-import type { BodyType, BodySubtype } from './types'
-import { physicalRadiusMeters, worldRadius } from './units'
+import type { BodyType, BodySubtype } from './lib/types'
+import { physicalRadiusMeters, worldRadius } from './lib/units'
 
 export interface DragState {
     active: boolean
@@ -25,6 +25,16 @@ export interface MeasureState {
     x1: number
     y1: number
     label: string // formatted length
+}
+
+// The osculating orbit of a (pinned) body, drawn as an ellipse with the parent at
+// one focus. Geometry is in world pixels; the parent supplies the live focus.
+export interface OrbitOverlay {
+    parent: Body
+    semiMajorPx: number
+    eccentricity: number
+    argPeriapsis: number
+    color: string
 }
 
 interface Star {
@@ -84,6 +94,8 @@ export const drawScene = (
     sim: Simulation,
     drag: DragState | null,
     measure: MeasureState | null,
+    orbit: OrbitOverlay | null = null,
+    pinned: Body | null = null,
 ): void => {
     const { w, h } = sim.view
 
@@ -138,6 +150,9 @@ export const drawScene = (
         }
     }
 
+    // Orbital path of the pinned body (drawn under the bodies).
+    if (orbit) drawOrbit(ctx, sim, orbit)
+
     // Bodies. Culled against the viewport with the widest glow halo (3r,
     // black holes) as margin, so glows from just-offscreen bodies still show.
     for (const b of sim.bodies) {
@@ -146,6 +161,14 @@ export const drawScene = (
         const m = r * 3
         if (sx + m < 0 || sx - m > w || sy + m < 0 || sy - m > h) continue
         drawBody(ctx, b, sx, sy, r)
+        // Highlight the pinned body with a bright red outline.
+        if (b === pinned) {
+            ctx.strokeStyle = '#ff2d2d'
+            ctx.lineWidth = 2
+            ctx.beginPath()
+            ctx.arc(sx, sy, Math.max(r + 4, 7), 0, Math.PI * 2)
+            ctx.stroke()
+        }
     }
 
     // Drag-to-launch preview.
@@ -157,6 +180,37 @@ export const drawScene = (
     if (measure && measure.active) {
         drawMeasure(ctx, sim, measure)
     }
+}
+
+const drawOrbit = (ctx: CanvasRenderingContext2D, sim: Simulation, o: OrbitOverlay): void => {
+    const a = o.semiMajorPx
+    const e = o.eccentricity
+    const b = a * Math.sqrt(Math.max(0, 1 - e * e)) // semi-minor axis
+    const cw = Math.cos(o.argPeriapsis)
+    const sw = Math.sin(o.argPeriapsis)
+    // The ellipse centre sits one focal distance (a·e) from the parent (a focus),
+    // opposite the periapsis direction.
+    const cx = o.parent.x - a * e * cw
+    const cy = o.parent.y - a * e * sw
+
+    const N = 128 // segments - smooth at any zoom without much cost
+    ctx.beginPath()
+    for (let i = 0; i <= N; i++) {
+        const th = (i / N) * Math.PI * 2
+        // Point on the orbit-frame ellipse, rotated into world space, then projected.
+        const ox = a * Math.cos(th)
+        const oy = b * Math.sin(th)
+        const [sx, sy] = sim.toScreen(cx + ox * cw - oy * sw, cy + ox * sw + oy * cw)
+        if (i === 0) ctx.moveTo(sx, sy)
+        else ctx.lineTo(sx, sy)
+    }
+    ctx.strokeStyle = o.color
+    ctx.lineWidth = 1.5
+    ctx.globalAlpha = 0.5
+    ctx.setLineDash([5, 5])
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.globalAlpha = 1
 }
 
 const drawMeasure = (ctx: CanvasRenderingContext2D, sim: Simulation, m: MeasureState): void => {
@@ -221,7 +275,7 @@ const drawBody = (ctx: CanvasRenderingContext2D, b: Body, sx: number, sy: number
         return
     }
 
-    // At a few pixels across, the glow and shading gradients are invisible —
+    // At a few pixels across, the glow and shading gradients are invisible -
     // a flat disc looks the same and skips two createRadialGradient calls.
     if (r <= 2.5) {
         ctx.fillStyle = b.color
@@ -303,9 +357,9 @@ const drawDragPreview = (ctx: CanvasRenderingContext2D, sim: Simulation, drag: D
 
 const shade = (hex: string, amt: number): string => {
     const n = parseInt(hex.slice(1), 16)
-    let r = (n >> 16) & 255,
-        g = (n >> 8) & 255,
-        b = n & 255
+    let r = (n >> 16) & 255
+    let g = (n >> 8) & 255
+    let b = n & 255
     r = Math.max(0, Math.min(255, r + r * amt))
     g = Math.max(0, Math.min(255, g + g * amt))
     b = Math.max(0, Math.min(255, b + b * amt))

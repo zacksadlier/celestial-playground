@@ -1,42 +1,16 @@
-// Gravitational N-body simulation engine — independent of any UI framework.
-import { physicalRadiusMeters, worldRadius, rawToDisplay, MAX_SUBSTEP_DT, STABILITY_ETA } from './units'
+// Gravitational N-body simulation engine - independent of any UI framework.
+import { physicalRadiusMeters, worldRadius, rawToDisplay } from './lib/units'
+import { MAX_SUBSTEP_DT, STABILITY_ETA, SUBTYPE_COLORS, MAX_BODIES, COLLISION_BROADPHASE_AT, PALETTE } from './lib/constants'
 import type {
     BodyType,
     BodyKind,
     PlanetSubtype,
     StarSubtype,
-    EvolvedStar,
     BodySubtype,
     BodyOptions,
     SimSettings,
     Camera,
-} from './types'
-
-// Characteristic colours for each subType (rough; tweak to taste). Stars get a
-// few slight shade variants so identical classes don't all look the same.
-const SUBTYPE_COLORS: Record<BodySubtype, string[]> = {
-    terrestrial: ['#9a8f86'], // rocky grey-brown
-    gasGiant: ['#e0a868'], // tan / orange bands
-    O: ['#9bb0ff', '#8fa6ff', '#a7baff'], // blue
-    B: ['#b7c6ff', '#aabcff', '#c2cfff'], // blue-white
-    A: ['#dbe4ff', '#d0dbff', '#e4ebff'], // white
-    F: ['#f7f4ec', '#fbf8f1', '#f2ede0'], // yellow-white
-    G: ['#ffe9a8', '#ffe399', '#ffefbc'], // yellow (Sun-like)
-    K: ['#ffc079', '#ffb868', '#ffca8e'], // orange
-    M: ['#ff8a5c', '#ff7e4d', '#ff9870'], // red-orange
-    whiteDwarf: ['#dbe9ff', '#cfe1ff', '#e6f0ff'], // hot blue-white
-    redGiant: ['#ff6a4a', '#ff5c3a', '#ff7a5e'], // cool, luminous red-orange
-    neutronStar: ['#bcd4ff', '#aecbff', '#cadeff'], // intense blue-white
-}
-
-// Mean density (kg/m³) for evolved stars, whose radius is decoupled from mass.
-// Chosen so the canonical mass gives the real size: white dwarf ≈ Earth-sized,
-// neutron star ≈ 11 km, red giant ≈ 50 R☉.
-export const EVOLVED_STAR_DENSITY: Record<EvolvedStar, number> = {
-    whiteDwarf: 1e9,
-    redGiant: 0.011,
-    neutronStar: 5e17,
-}
+} from './lib/types'
 
 export const subtypeColor = (subType: BodySubtype): string => {
     const shades = SUBTYPE_COLORS[subType]
@@ -65,27 +39,6 @@ export const defaultSubtype = (type: BodyType, massRaw: number): BodySubtype | u
     if (type === 'star') return classifyStar(massRaw)
     return undefined
 }
-
-// Hard cap on the number of bodies. Gravity is exact O(n²); beyond this the
-// per-frame cost isn't worth it, so further additions are simply ignored.
-export const MAX_BODIES = 1000
-
-// Above this body count, collisions use a sweep-and-prune broad phase instead
-// of the exact O(n²) all-pairs scan.
-export const COLLISION_BROADPHASE_AT = 256
-
-const PALETTE = [
-    '#7aa2ff',
-    '#c08bff',
-    '#ff8bba',
-    '#ffd27a',
-    '#7ae0ff',
-    '#9bff8b',
-    '#ff9b6b',
-    '#e0e0ff',
-    '#8bffd6',
-    '#ffb38b',
-]
 
 export const randomColor = (): string => {
     return PALETTE[(Math.random() * PALETTE.length) | 0]
@@ -158,6 +111,73 @@ export type TypedBody = PlanetBody | StarBody | BlackHoleBody
 export const isPlanet = (b: Body): b is PlanetBody => b.type === 'planet'
 export const isStar = (b: Body): b is StarBody => b.type === 'star'
 export const isBlackHole = (b: Body): b is BlackHoleBody => b.type === 'blackhole'
+
+// ---- Orbit detection ------------------------------------------------------
+// Osculating two-body elements of one body's orbit around another, in the sim's
+// own units: distances are pixels (× metersPerPixel for SI) and the period is in
+// sim-time (× secondsPerSimTime for seconds).
+export interface OrbitInfo {
+    parent: Body
+    semiMajorPx: number
+    eccentricity: number
+    argPeriapsis: number // direction (radians) from the parent toward periapsis
+    periodSim: number
+    periapsisPx: number
+    apoapsisPx: number
+}
+
+// Identify the body `b` is orbiting, if any, plus the elements of that orbit.
+// The primary is taken to be the heavier body pulling on `b` most strongly (its
+// dominant attractor); an orbit is reported only when the pair is gravitationally
+// bound (negative two-body energy). Returns null when `b` is itself the local
+// primary (nothing heavier pulls on it) or is unbound - e.g. a hyperbolic flyby.
+export const findOrbit = (bodies: Body[], b: Body, G: number): OrbitInfo | null => {
+    let parent: Body | null = null
+    let bestPull = 0
+    for (const p of bodies) {
+        if (p === b || !p.alive || p.mass <= b.mass) continue // a primary must be heavier
+        const dx = b.x - p.x
+        const dy = b.y - p.y
+        const r2 = dx * dx + dy * dy
+        if (r2 === 0) continue
+        const pull = p.mass / r2 // ∝ the gravitational acceleration p exerts on b
+        if (pull > bestPull) {
+            bestPull = pull
+            parent = p
+        }
+    }
+    if (!parent) return null
+
+    // Elements from the relative state vector (vis-viva energy + angular momentum).
+    const dx = b.x - parent.x
+    const dy = b.y - parent.y
+    const dvx = b.vx - parent.vx
+    const dvy = b.vy - parent.vy
+    const r = Math.hypot(dx, dy)
+    const v2 = dvx * dvx + dvy * dvy
+    const mu = G * (parent.mass + b.mass) // standard gravitational parameter
+    const energy = v2 / 2 - mu / r // specific orbital energy
+    if (energy >= 0) return null // unbound: not a closed orbit
+
+    const a = -mu / (2 * energy) // semi-major axis
+    // Eccentricity vector - points from the focus (parent) toward periapsis; its
+    // magnitude is the eccentricity and its angle fixes the ellipse's orientation.
+    const rdotv = dx * dvx + dy * dvy
+    const ex = ((v2 - mu / r) * dx - rdotv * dvx) / mu
+    const ey = ((v2 - mu / r) * dy - rdotv * dvy) / mu
+    const e = Math.hypot(ex, ey)
+    const argPeriapsis = Math.atan2(ey, ex)
+    const periodSim = 2 * Math.PI * Math.sqrt((a * a * a) / mu)
+    return {
+        parent,
+        semiMajorPx: a,
+        eccentricity: e,
+        argPeriapsis,
+        periodSim,
+        periapsisPx: a * (1 - e),
+        apoapsisPx: a * (1 + e),
+    }
+}
 
 export class Simulation {
     bodies: Body[] = []
@@ -290,7 +310,7 @@ export class Simulation {
         }
     }
 
-    // Exact O(n²) pair scan — used for small scenes where it's cheapest.
+    // Exact O(n²) pair scan - used for small scenes where it's cheapest.
     private collideAllPairs(): void {
         const bodies = this.bodies
         const mpp = this.metersPerPixel

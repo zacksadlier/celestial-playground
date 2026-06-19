@@ -3,5 +3,5 @@ import solid from 'vite-plugin-solid'
 
 export default defineConfig({
     plugins: [solid()],
-    server: { open: true },
+    server: { open: true, host: true },
 })

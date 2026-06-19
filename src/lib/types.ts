@@ -11,7 +11,9 @@ export type BodyKind = BodyType
 export type PlanetSubtype = 'terrestrial' | 'gasGiant'
 export type MainSequenceClass = 'O' | 'B' | 'A' | 'F' | 'G' | 'K' | 'M'
 export type EvolvedStar = 'whiteDwarf' | 'redGiant' | 'neutronStar'
-export type StarSubtype = MainSequenceClass | EvolvedStar
+// A red dwarf is a small, cool, low-mass main-sequence star (not evolved); it gets
+// its own subtype so it can be picked and styled distinctly from a generic M-type.
+export type StarSubtype = MainSequenceClass | EvolvedStar | 'redDwarf'
 export type BodySubtype = PlanetSubtype | StarSubtype
 
 export interface BodyOptions {
@@ -60,9 +62,27 @@ export interface TooltipInfo {
     mass: string
     halo?: string // dark-matter-halo mass, shown separately when present
     velocity: string
+    orbit?: OrbitTooltip // present only when the body is bound to a heavier primary
+    pinned?: boolean // true when this tooltip is pinned (persists after a click)
     x: number
     y: number
 }
+
+// Pre-formatted orbital elements for display when a body is orbiting another.
+export interface OrbitTooltip {
+    parent: string // label of the body being orbited
+    period: string
+    semiMajor: string
+    eccentricity: string
+    periapsis: string
+    apoapsis: string
+}
+
+// How a left click/drag on the canvas is interpreted.
+//   body    - add/launch bodies (the default)
+//   pan     - drag to move the view
+//   measure - drag a ruler / pick bodies to measure between
+export type InteractionMode = 'body' | 'pan' | 'measure'
 
 export interface Actions {
     togglePlay: () => void
@@ -71,5 +91,5 @@ export interface Actions {
     zoomIn: () => void
     zoomOut: () => void
     resetView: () => void
-    toggleMeasure: () => void
+    setMode: (mode: InteractionMode) => void
 }

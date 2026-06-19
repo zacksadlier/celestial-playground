@@ -1,54 +1,35 @@
 // Maps between the simulation's internal (dimensionless) "raw" mass and the
-// physical units shown in the UI.
-//
-// One fixed raw->mass scale is shared by both units, so they stay physically
-// proportional: 1 M☉ = EARTH_MASSES_PER_SOLAR_MASS (~333,000) M⊕.
+// physical units shown in the UI, plus scale/format helpers. The fixed values
+// these functions use live in ./constants.
 //   - Planets are expressed in Earth masses (M⊕)
 //   - Stars and black holes are expressed in solar masses (M☉)
-import type { BodyType, BodySubtype, PlanetSubtype, StarSubtype, EvolvedStar } from './types'
-import { EVOLVED_STAR_DENSITY } from './physics'
-
-// Real astronomical ratio: 1 solar mass ≈ 333,000 Earth masses.
-const EARTH_MASSES_PER_SOLAR_MASS = 332_946
-
-// Anchor: one raw mass unit in solar masses (raw 2400 ≈ 1 M☉). The Earth-mass
-// factor is derived from the real ratio above, keeping the two proportional.
-const SOLAR_PER_RAW = 1 / 2400
-export const EARTH_PER_RAW = SOLAR_PER_RAW * EARTH_MASSES_PER_SOLAR_MASS
-
-// ---- SI scaling -----------------------------------------------------------
-// The engine integrates with G = 1 in self-consistent "sim units". Choosing a
-// length scale (metres per pixel) plus the already-fixed mass scale below pins
-// the time scale via Kepler's relation  T = sqrt(L³ / (G·M))  — you can only
-// pick two of {length, mass, time}; gravity fixes the third.
-const G_SI = 6.674e-11 // m³ kg⁻¹ s⁻²
-const SOLAR_MASS_KG = 1.98892e30
-const KG_PER_RAW = SOLAR_MASS_KG * SOLAR_PER_RAW // kg per raw mass unit (fixed)
-
-export const AU_M = 1.495978707e11
-export const LY_M = 9.4607e15
-export const DAY_S = 86_400
-export const YEAR_S = 365.25 * DAY_S
-const C_MS = 2.99792458e8 // speed of light
-
-// Adjustable length scale: metres represented by one pixel (at zoom 1).
-export const SCALE_RANGE = { min: 1e6, max: 1000 * LY_M, default: AU_M }
-
-// Playback speed = seconds of simulated time advanced per real second.
-// The minimum and default are fixed; the maximum is scale-dependent (see
-// maxStableSpeed) because tighter scales can't be integrated as fast.
-export const SPEED_RANGE = { min: 1, default: 50 * YEAR_S }
-
-// Integrator stability bounds, shared with the sim loop. Each substep advances
-// at most MAX_SUBSTEP_DT of sim-time; a frame uses at most MAX_SUBSTEPS of them.
-export const MAX_SUBSTEP_DT = 0.1
-export const MAX_SUBSTEPS = 400
-
-// Safety factor on the dynamical time of the most strongly-interacting pair.
-// The actual substep is shrunk to STABILITY_ETA · t_dyn when massive bodies get
-// close, so a step never crosses much of a tight orbit (which would make the
-// integrator fling bodies past each other instead of binding them).
-export const STABILITY_ETA = 0.15
+import type { BodyType, BodySubtype, EvolvedStar } from './types'
+import {
+    EARTH_PER_RAW,
+    SOLAR_PER_RAW,
+    G_SI,
+    KG_PER_RAW,
+    C_MS,
+    AU_M,
+    LY_M,
+    DAY_S,
+    YEAR_S,
+    SCALE_RANGE,
+    SPEED_RANGE,
+    MAX_SUBSTEP_DT,
+    MAX_SUBSTEPS,
+    PLANET_DENSITY,
+    STAR_DENSITY,
+    RED_DWARF_DENSITY,
+    MIN_WORLD_RADIUS,
+    FLOOR_BOOST_ORDERS,
+    FLOOR_BOOST_GAIN,
+    MASS_RANGES,
+    PLANET_SUBTYPES,
+    STAR_SUBTYPES,
+    SUBTYPE_SHORT,
+    EVOLVED_STAR_DENSITY,
+} from './constants'
 
 // Fastest playback (sim-seconds per real second) that stays stable at a given
 // length scale, assuming ~60 fps. Beyond this a frame would need more than
@@ -65,18 +46,6 @@ export const sliderToSpeed = (t: number, maxSpeed: number): number => {
     return SPEED_RANGE.min * Math.pow(maxSpeed / SPEED_RANGE.min, t)
 }
 
-// Densities used to estimate a body's physical radius from its mass (kg/m³).
-const PLANET_DENSITY = 5514 // Earth-like
-const STAR_DENSITY = 1408 // Sun-like
-// Pixel floor so a body stays visible/clickable even when physically sub-pixel.
-const MIN_WORLD_RADIUS = 1.5
-// When a body is sub-pixel, the floor is raised by how close it is to being
-// resolvable, so relative size still reads (the Sun looks bigger than the
-// planets) — but a body that's sub-pixel by many orders of magnitude (a star
-// seen across a galaxy) gets no boost and stays a point.
-const FLOOR_BOOST_ORDERS = 3.5 // boost applies within this many orders of magnitude of the floor
-const FLOOR_BOOST_GAIN = 2 // extra pixels of floor per order of magnitude within that window
-
 // A body's true physical radius in metres, from its mass, type, and subType.
 export const physicalRadiusMeters = (massRaw: number, type: BodyType, subType?: BodySubtype): number => {
     const kg = massRaw * KG_PER_RAW
@@ -88,6 +57,8 @@ export const physicalRadiusMeters = (massRaw: number, type: BodyType, subType?: 
     let density: number
     if (subType && subType in EVOLVED_STAR_DENSITY) {
         density = EVOLVED_STAR_DENSITY[subType as EvolvedStar]
+    } else if (subType === 'redDwarf') {
+        density = RED_DWARF_DENSITY
     } else {
         density = type === 'star' ? STAR_DENSITY : PLANET_DENSITY
     }
@@ -104,13 +75,6 @@ export const worldRadius = (radiusMeters: number, metersPerPixel: number): numbe
     const floor = MIN_WORLD_RADIUS + Math.pow(FLOOR_BOOST_GAIN, Math.max(0, FLOOR_BOOST_ORDERS - ordersBelowFloor)) - 1
     return Math.max(physical, floor)
 }
-
-export const SCALE_PRESETS: [string, number][] = [
-    ['100k km', 1e8],
-    ['1 AU', AU_M],
-    ['0.1 ly', 0.1 * LY_M],
-    ['1 ly', LY_M],
-]
 
 // Seconds of simulated time per sim-time unit, derived from the length scale.
 export const secondsPerSimTime = (metersPerPixel: number): number => {
@@ -148,7 +112,7 @@ export const formatScale = (metersPerPixel: number): string => {
     return `1 px = ${formatLength(metersPerPixel)}`
 }
 
-const formatDuration = (s: number): string => {
+export const formatDuration = (s: number): string => {
     if (s <= 0) return '0 s'
     if (s >= 1e9 * YEAR_S) return (s / (1e9 * YEAR_S)).toFixed(1) + ' Gyr'
     if (s >= 1e6 * YEAR_S) return (s / (1e6 * YEAR_S)).toFixed(1) + ' Myr'
@@ -158,13 +122,6 @@ const formatDuration = (s: number): string => {
     if (s >= 3600) return (s / 3600).toFixed(1) + ' h'
     if (s >= 60) return (s / 60).toFixed(1) + ' min'
     return s.toFixed(1) + ' s'
-}
-
-// Selectable mass range per body type, expressed in that type's display unit.
-export const MASS_RANGES: Record<BodyType, { min: number; max: number; default: number }> = {
-    planet: { min: 0.1, max: 1_000, default: 1 }, // Earth masses
-    star: { min: 0.1, max: 250, default: 1 }, // solar masses
-    blackhole: { min: 1, max: 1_000_000_000, default: 1_000 }, // solar masses
 }
 
 export const massUnit = (type: BodyType): string => {
@@ -196,43 +153,9 @@ export const subtypeLabel = (type: BodyType, subType: BodySubtype | undefined): 
     return 'Black hole'
 }
 
-// ---- subType selection (New Body panel) -----------------------------------
-const PLANET_SUBTYPES: PlanetSubtype[] = ['terrestrial', 'gasGiant']
-const STAR_SUBTYPES: StarSubtype[] = ['O', 'B', 'A', 'F', 'G', 'K', 'M', 'whiteDwarf', 'redGiant', 'neutronStar']
-
 export const subtypesForType = (type: BodyType): BodySubtype[] =>
     type === 'planet' ? PLANET_SUBTYPES : type === 'star' ? STAR_SUBTYPES : []
 
-// Default mass for each subType, in that type's display unit (M⊕ / M☉).
-export const SUBTYPE_DEFAULT_MASS: Record<BodySubtype, number> = {
-    terrestrial: 1, // M⊕
-    gasGiant: 25, // M⊕
-    O: 30, // M☉ — representative main-sequence masses
-    B: 5,
-    A: 1.7,
-    F: 1.2,
-    G: 1,
-    K: 0.7,
-    M: 0.3,
-    whiteDwarf: 0.6, // M☉ — typical evolved-state masses
-    redGiant: 1.5,
-    neutronStar: 1.4,
-}
-
-const SUBTYPE_SHORT: Record<BodySubtype, string> = {
-    terrestrial: 'Terrestrial',
-    gasGiant: 'Gas giant',
-    O: 'O-type',
-    B: 'B-type',
-    A: 'A-type',
-    F: 'F-type',
-    G: 'G-type',
-    K: 'K-type',
-    M: 'M-type',
-    whiteDwarf: 'White dwarf',
-    redGiant: 'Red giant',
-    neutronStar: 'Neutron star',
-}
 export const subtypeShortLabel = (s: BodySubtype): string => SUBTYPE_SHORT[s]
 
 // subType to select when switching to a body type (black holes have none).

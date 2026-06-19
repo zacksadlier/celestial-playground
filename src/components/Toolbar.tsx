@@ -1,13 +1,12 @@
 import type { Accessor } from 'solid-js'
-import { Play, Pause, SkipForward, Trash2, Ruler, ZoomIn, ZoomOut, RotateCcw } from 'lucide-solid'
-import type { Actions } from '../types'
-
-const ICON_SIZE = 16
+import { Play, Pause, SkipForward, Trash2, Orbit, Move, Ruler, ZoomIn, ZoomOut, RotateCcw } from 'lucide-solid'
+import type { Actions, InteractionMode } from '../lib/types'
+import { ICON_SIZE } from '../lib/constants'
 
 interface ToolbarProps {
     running: Accessor<boolean>
     zoom: Accessor<number>
-    measuring: Accessor<boolean>
+    mode: Accessor<InteractionMode>
     actions: Actions
 }
 
@@ -30,9 +29,25 @@ const Toolbar = (props: ToolbarProps) => {
             <span class='sep' />
 
             <button
-                classList={{ active: props.measuring() }}
-                title='Measure distance — drag a line on the canvas'
-                onClick={props.actions.toggleMeasure}
+                classList={{ active: props.mode() === 'body' }}
+                title='Body mode - click or drag on empty space to add a body'
+                onClick={() => props.actions.setMode('body')}
+            >
+                <Orbit size={ICON_SIZE} />
+                Body
+            </button>
+            <button
+                classList={{ active: props.mode() === 'pan' }}
+                title='Pan mode - drag to move the view'
+                onClick={() => props.actions.setMode('pan')}
+            >
+                <Move size={ICON_SIZE} />
+                Pan
+            </button>
+            <button
+                classList={{ active: props.mode() === 'measure' }}
+                title='Measure mode - drag a line on the canvas'
+                onClick={() => props.actions.setMode('measure')}
             >
                 <Ruler size={ICON_SIZE} />
                 Measure

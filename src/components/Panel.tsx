@@ -1,7 +1,7 @@
 import { For, Show, createSignal } from 'solid-js'
 import type { Accessor } from 'solid-js'
 import type { SetStoreFunction } from 'solid-js/store'
-import type { SimSettings, BodyType, BodySubtype, NewBodyConfig, Stats } from '../types'
+import type { SimSettings, BodyType, BodySubtype, NewBodyConfig, Stats } from '../lib/types'
 import type { PresetName, PresetOptions } from '../presets'
 import PresetConfig from './PresetConfig'
 import {
@@ -10,19 +10,17 @@ import {
     formatSpeed,
     massToSlider,
     sliderToMass,
-    MASS_RANGES,
     formatScale,
     scaleToSlider,
     sliderToScale,
-    SCALE_PRESETS,
     speedToSlider,
     sliderToSpeed,
     maxStableSpeed,
     subtypesForType,
     subtypeShortLabel,
-    SUBTYPE_DEFAULT_MASS,
     defaultSubtypeForType,
-} from '../units'
+} from '../lib/units'
+import { MASS_RANGES, SCALE_PRESETS, SUBTYPE_DEFAULT_MASS } from '../lib/constants'
 
 interface PanelProps {
     settings: SimSettings
@@ -35,6 +33,7 @@ interface PanelProps {
     setPresetOptions: SetStoreFunction<PresetOptions>
     scale: Accessor<number>
     setScale: (m: number) => void
+    open: Accessor<boolean>
 }
 
 const PRESETS: [PresetName, string][] = [
@@ -50,7 +49,7 @@ const Panel = (props: PanelProps) => {
     const [selected, setSelected] = createSignal<PresetName | null>(null)
 
     return (
-        <aside id='panel'>
+        <aside id='panel' classList={{ collapsed: !props.open() }}>
             <section class='block'>
                 <h2>New Body</h2>
 

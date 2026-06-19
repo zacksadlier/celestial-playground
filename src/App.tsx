@@ -1,33 +1,27 @@
 import { createSignal, createEffect, onMount, onCleanup, Show } from 'solid-js'
 import { createStore } from 'solid-js/store'
-import { Simulation, Body, isBlackHole, randomColor } from './physics'
+import { Simulation, Body, randomColor, findOrbit } from './physics'
 import { drawScene } from './render'
-import type { DragState, MeasureState } from './render'
+import type { DragState } from './render'
 import { presets, DEFAULT_PRESET_OPTIONS } from './presets'
 import type { PresetName, PresetOptions } from './presets'
 import {
     displayToRaw,
-    rawToDisplay,
-    formatMass,
     formatVelocity,
-    subtypeLabel,
     formatLength,
-    formatForce,
-    gravitationalForceN,
-    SCALE_RANGE,
-    SPEED_RANGE,
     secondsPerSimTime,
     lightSpeedSimVel,
     maxStableSpeed,
-    MAX_SUBSTEPS,
-} from './units'
-import type { SimSettings, NewBodyConfig, Stats, Actions, TooltipInfo } from './types'
-import { Info } from 'lucide-solid'
+} from './lib/units'
+import { SCALE_RANGE, SPEED_RANGE, MAX_SUBSTEPS, VELOCITY_SCALE } from './lib/constants'
+import type { SimSettings, NewBodyConfig, Stats, Actions, InteractionMode } from './lib/types'
+import { createMeasure } from './ui/measure'
+import { createTooltips } from './ui/tooltips'
+import { Info, Menu, X } from 'lucide-solid'
 import Panel from './components/Panel'
 import Toolbar from './components/Toolbar'
 import InfoModal from './components/InfoModal'
-
-const VELOCITY_SCALE = 0.6 // launch responsiveness: ~fraction of the drag's screen length the body drifts per second
+import BodyTooltip from './components/BodyTooltip'
 
 const App = () => {
     let canvas!: HTMLCanvasElement
@@ -51,10 +45,12 @@ const App = () => {
     const [zoom, setZoom] = createSignal(1)
     const [presetOptions, setPresetOptions] = createStore<PresetOptions>(structuredClone(DEFAULT_PRESET_OPTIONS))
     const [stats, setStats] = createStore<Stats>({ bodies: 0, energy: 0, fps: 0 })
-    const [tooltip, setTooltip] = createSignal<TooltipInfo | null>(null)
     const [metersPerPixel, setMetersPerPixel] = createSignal(SCALE_RANGE.default)
-    const [measureMode, setMeasureMode] = createSignal(false)
+    const [mode, setMode] = createSignal<InteractionMode>('body')
     const [showInfo, setShowInfo] = createSignal(false)
+    // The settings panel is a drawer - collapsed by default on small (mobile)
+    // viewports so the canvas isn't covered; open by default on wider screens.
+    const [panelOpen, setPanelOpen] = createSignal(window.innerWidth > 720)
 
     // Keep the engine's settings in sync with the reactive store.
     createEffect(() => {
@@ -72,7 +68,7 @@ const App = () => {
     })
 
     // A tighter scale can't be integrated as fast, so clamp speed to its ceiling
-    // when the scale changes — keeps the Speed slider out of the dead zone.
+    // when the scale changes - keeps the Speed slider out of the dead zone.
     createEffect(() => {
         const max = maxStableSpeed(metersPerPixel())
         if (settings.speed > max) setSettings('speed', max)
@@ -112,64 +108,62 @@ const App = () => {
         return { vx, vy }
     }
 
-    // Measure-mode ruler state (world coords; off the reactive graph).
-    // `dragging` = freeform drag ruler; bodyA/bodyB = body-to-body ruler (paused).
-    const measure: MeasureState & {
-        dragging: boolean
-        bodyA: Body | null
-        bodyB: Body | null
-        pending: boolean
-    } = {
-        active: false,
-        dragging: false,
-        bodyA: null,
-        bodyB: null,
-        pending: false,
-        x0: 0,
-        y0: 0,
-        x1: 0,
-        y1: 0,
-        label: '',
-    }
-
-    const resetMeasure = (): void => {
-        measure.active = false
-        measure.dragging = false
-        measure.bodyA = null
-        measure.bodyB = null
-        measure.pending = false
-    }
-
-    // Keep a body-to-body ruler in sync with the (live) body positions. While
-    // only the first body is chosen, the far end rubber-bands to the cursor.
-    const refreshBodyMeasure = (): void => {
-        const a = measure.bodyA
-        if (!a) return
-        const b = measure.bodyB
-        // Drop the measurement if a referenced body was merged away or cleared.
-        if (!a.alive || !sim.bodies.includes(a) || (b && (!b.alive || !sim.bodies.includes(b)))) {
-            resetMeasure()
-            return
-        }
-        measure.x0 = a.x
-        measure.y0 = a.y
-        if (b) {
-            measure.x1 = b.x
-            measure.y1 = b.y
-        } else {
-            const [mx, my] = sim.toWorld(mouse.x, mouse.y)
-            measure.x1 = mx
-            measure.y1 = my
-        }
-        const dist = Math.hypot(measure.x1 - measure.x0, measure.y1 - measure.y0)
-        const distM = dist * sim.metersPerPixel
-        measure.label = formatLength(distM)
-        // With both endpoints on bodies, also show their mutual gravitational pull.
-        if (b) measure.label += `  |  ${formatForce(gravitationalForceN(a.mass, b.mass, distM))}`
-    }
-
     // Latest cursor position, used to hit-test bodies for the hover tooltip.
     const mouse = { x: 0, y: 0, inside: false }
+
+    // Measure tool (ruler state + body-to-body refresh) lives in its own module.
+    const { measure, resetMeasure, refreshBodyMeasure } = createMeasure(sim, mouse)
+
+    // Press tracking, to tell a click (pins a body) from a drag (launches a body).
+    const CLICK_MOVE_PX = 5
+    let pressBody: Body | null = null
+    let pressX = 0
+    let pressY = 0
+
+    // Multi-touch state for pinch-zoom / two-finger pan. While two or more touch
+    // points are down we drive the camera instead of launching a body.
+    const activeTouches = new Map<number, { x: number; y: number }>()
+    let pinchDist = 0 // last finger separation (px); > 0 means a pinch is in progress
+    let pinchMidX = 0
+    let pinchMidY = 0
+
+    // A second finger turns the gesture into a pinch: abandon the pending
+    // single-touch launch and seed the pinch metrics.
+    const beginPinch = (): void => {
+        drag.active = false
+        drag.panning = false
+        pressBody = null
+        const [a, b] = [...activeTouches.values()]
+        pinchDist = Math.hypot(a.x - b.x, a.y - b.y)
+        pinchMidX = (a.x + b.x) / 2
+        pinchMidY = (a.y + b.y) / 2
+    }
+
+    // Drive the camera from the two touch points: scale about their midpoint
+    // (keeping the world point under it fixed) and pan by the midpoint's movement.
+    const updatePinch = (): void => {
+        const [a, b] = [...activeTouches.values()]
+        const dist = Math.hypot(a.x - b.x, a.y - b.y)
+        const midX = (a.x + b.x) / 2
+        const midY = (a.y + b.y) / 2
+
+        const [wx, wy] = sim.toWorld(midX, midY)
+        if (pinchDist > 0) {
+            sim.cam.zoom = Math.max(0.1, Math.min(8, sim.cam.zoom * (dist / pinchDist)))
+        }
+        const [ax, ay] = sim.toWorld(midX, midY)
+        sim.cam.x += wx - ax
+        sim.cam.y += wy - ay
+
+        // Two-finger drag pans by how far the midpoint moved.
+        sim.cam.x -= (midX - pinchMidX) / sim.cam.zoom
+        sim.cam.y -= (midY - pinchMidY) / sim.cam.zoom
+
+        pinchDist = dist
+        pinchMidX = midX
+        pinchMidY = midY
+        setZoom(sim.cam.zoom)
+    }
 
     // Find the body under a screen point, if any (nearest centre within radius).
     const pickBody = (sx: number, sy: number): Body | null => {
@@ -187,29 +181,16 @@ const App = () => {
         return best
     }
 
-    const updateTooltip = (): void => {
-        if (drag.active || !mouse.inside) {
-            setTooltip(null)
-            return
-        }
-        const b = pickBody(mouse.x, mouse.y)
-        if (!b) {
-            setTooltip(null)
-            return
-        }
-        const [sx, sy] = sim.toScreen(b.x, b.y)
-        // Black holes carry a halo add-on; show the body's own mass and the halo separately.
-        const hasHalo = isBlackHole(b) && b.haloMass > 0
-        const ownMass = hasHalo ? b.mass - b.haloMass : b.mass
-        setTooltip({
-            label: subtypeLabel(b.type, b.subType),
-            mass: formatMass(rawToDisplay(ownMass, b.type), b.type),
-            halo: hasHalo ? formatMass(rawToDisplay(b.haloMass, b.type), b.type) : undefined,
-            velocity: formatVelocity(Math.hypot(b.vx, b.vy), metersPerPixel()),
-            x: sx,
-            y: sy,
-        })
-    }
+    // Hover + pinned tooltips (and the over-body flag for the Pan cursor) live in
+    // their own module; it owns the pinned-body signal too.
+    const { hoverTip, pinnedTip, pinned, setPinned, overBody, updateTooltip } = createTooltips({
+        sim,
+        mouse,
+        drag,
+        pickBody,
+        metersPerPixel,
+        gravity: () => settings.G,
+    })
 
     // ---- Simulation + render loop ----------------------------------------
     let raf = 0
@@ -256,8 +237,21 @@ const App = () => {
 
         refreshBodyMeasure()
 
+        // Orbital path of the pinned body, when it's bound to a heavier primary.
+        const pin = pinned()
+        const orbit = pin && pin.alive && sim.bodies.includes(pin) ? findOrbit(sim.bodies, pin, settings.G) : null
+        const orbitOverlay = orbit
+            ? {
+                  parent: orbit.parent,
+                  semiMajorPx: orbit.semiMajorPx,
+                  eccentricity: orbit.eccentricity,
+                  argPeriapsis: orbit.argPeriapsis,
+                  color: pin!.color,
+              }
+            : null
+
         const ctx = canvas.getContext('2d')!
-        drawScene(ctx, sim, drag.active && !drag.panning ? drag : null, measure.active ? measure : null)
+        drawScene(ctx, sim, drag.active && !drag.panning ? drag : null, measure.active ? measure : null, orbitOverlay, pin)
         updateTooltip()
 
         // FPS + stats, refreshed a few times a second.
@@ -294,15 +288,30 @@ const App = () => {
     // ---- Pointer interaction ---------------------------------------------
     const onPointerDown = (e: PointerEvent): void => {
         canvas.setPointerCapture(e.pointerId)
-        const pan = e.button === 1 || e.button === 2 || e.shiftKey
+        if (e.pointerType === 'touch') {
+            activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+            // A second finger starts a pinch - handle the camera, not a new body.
+            if (activeTouches.size >= 2) {
+                beginPinch()
+                return
+            }
+        }
+        // Pan on a middle/right/shift drag always, and on a plain left drag when
+        // Pan mode is active.
+        const pan = e.button === 1 || e.button === 2 || e.shiftKey || mode() === 'pan'
         if (pan) {
             drag.active = true
             drag.panning = true
             drag.lastX = e.clientX
             drag.lastY = e.clientY
+            // In Pan mode, a left press that doesn't turn into a drag still pins the
+            // body underneath (resolved on release); other pan gestures don't pin.
+            pressBody = mode() === 'pan' && e.button === 0 ? pickBody(e.clientX, e.clientY) : null
+            pressX = e.clientX
+            pressY = e.clientY
             return
         }
-        if (measureMode()) {
+        if (mode() === 'measure') {
             // While paused, clicking bodies measures between their centres.
             if (!running()) {
                 const b = pickBody(e.clientX, e.clientY)
@@ -333,6 +342,10 @@ const App = () => {
             return
         }
         const [wx, wy] = sim.toWorld(e.clientX, e.clientY)
+        // Remember whether the press landed on a body, to detect a click-to-pin on release.
+        pressBody = pickBody(e.clientX, e.clientY)
+        pressX = e.clientX
+        pressY = e.clientY
         drag.active = true
         drag.panning = false
         drag.wx = wx
@@ -342,9 +355,19 @@ const App = () => {
         drag.mass = displayToRaw(newBody.mass, newBody.type)
         drag.type = newBody.type
         drag.subType = newBody.subType
+
+        // Clear pinned tooltip on the click
+        setPinned(null)
     }
 
     const onPointerMove = (e: PointerEvent): void => {
+        if (e.pointerType === 'touch' && activeTouches.has(e.pointerId)) {
+            activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+            if (activeTouches.size >= 2) {
+                updatePinch()
+                return
+            }
+        }
         mouse.x = e.clientX
         mouse.y = e.clientY
         mouse.inside = true
@@ -369,12 +392,26 @@ const App = () => {
     }
 
     const onPointerUp = (e: PointerEvent): void => {
+        if (e.pointerType === 'touch') activeTouches.delete(e.pointerId)
+        // While (or just after) a pinch, don't let a lifted finger launch a body.
+        if (pinchDist > 0) {
+            drag.active = false
+            drag.panning = false
+            if (activeTouches.size < 2) pinchDist = 0
+            return
+        }
         if (measure.dragging) {
             measure.dragging = false // keep the line on screen for reading
             return
         }
         if (!drag.active) return
-        if (!drag.panning) {
+        const movedPx = Math.hypot(e.clientX - pressX, e.clientY - pressY)
+        if (pressBody && pressBody.alive && movedPx <= CLICK_MOVE_PX) {
+            // A click (not a drag) on a body pins its tooltip - in Body or Pan mode;
+            // clicking the same body again unpins it, another switches the pin.
+            setPinned((prev) => (prev === pressBody ? null : pressBody))
+        } else if (!drag.panning) {
+            // A drag, or a click on empty space, in Body mode launches a new body.
             const [ex, ey] = sim.toWorld(e.clientX, e.clientY)
             const { vx, vy } = launchVelocity(ex, ey)
             sim.add(
@@ -391,8 +428,18 @@ const App = () => {
             )
             setStats('bodies', sim.bodies.length)
         }
+        pressBody = null
         drag.active = false
         drag.panning = false
+    }
+
+    // A cancelled pointer (e.g. capture lost) - drop it from the gesture state.
+    const onPointerCancel = (e: PointerEvent): void => {
+        if (e.pointerType === 'touch') activeTouches.delete(e.pointerId)
+        if (activeTouches.size < 2) pinchDist = 0
+        drag.active = false
+        drag.panning = false
+        pressBody = null
     }
 
     const onWheel = (e: WheelEvent): void => {
@@ -410,6 +457,7 @@ const App = () => {
     // ---- Public actions for child controls -------------------------------
     const loadPreset = (name: PresetName): void => {
         sim.clear()
+        setPinned(null)
         sim.cam = { x: 0, y: 0, zoom: 1 }
         setZoom(1)
         const scene = presets[name](settings.G, presetOptions[name] as never)
@@ -434,8 +482,8 @@ const App = () => {
         clear: () => {
             sim.clear()
             setStats('bodies', 0)
-            setMeasureMode(false)
             resetMeasure()
+            setPinned(null)
         },
         zoomIn: () => applyZoom(1.25),
         zoomOut: () => applyZoom(1 / 1.25),
@@ -443,10 +491,10 @@ const App = () => {
             sim.cam = { x: 0, y: 0, zoom: 1 }
             setZoom(1)
         },
-        toggleMeasure: () => {
-            const on = !measureMode()
-            setMeasureMode(on)
-            if (!on) resetMeasure() // clear the ruler when leaving measure mode
+        setMode: (m) => {
+            // Leaving measure mode drops any half-built ruler.
+            if (mode() === 'measure' && m !== 'measure') resetMeasure()
+            setMode(m)
         },
     }
 
@@ -484,9 +532,15 @@ const App = () => {
             <canvas
                 ref={canvas}
                 id='space'
+                classList={{
+                    'mode-pan': mode() === 'pan',
+                    'mode-measure': mode() === 'measure',
+                    'over-body': overBody(),
+                }}
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
+                onPointerCancel={onPointerCancel}
                 onPointerLeave={() => {
                     mouse.inside = false
                 }}
@@ -494,28 +548,18 @@ const App = () => {
                 onContextMenu={(e) => e.preventDefault()}
             />
 
-            <Show when={tooltip()}>
-                {(t) => (
-                    <div class='tooltip' style={{ left: `${t().x + 16}px`, top: `${t().y + 16}px` }}>
-                        <div class='tt-title'>{t().label}</div>
-                        <div class='tt-row'>
-                            <span>Mass</span>
-                            <b>{t().mass}</b>
-                        </div>
-                        <Show when={t().halo}>
-                            <div class='tt-row'>
-                                <span>Halo</span>
-                                <b>{t().halo}</b>
-                            </div>
-                        </Show>
-                        <div class='tt-row'>
-                            <span>Velocity</span>
-                            <b>{t().velocity}</b>
-                        </div>
-                    </div>
-                )}
-            </Show>
+            <Show when={pinnedTip()}>{(t) => <BodyTooltip info={t()} onDismiss={() => setPinned(null)} />}</Show>
+            <Show when={hoverTip()}>{(t) => <BodyTooltip info={t()} />}</Show>
             <header id='topbar'>
+                <button
+                    id='menu-toggle'
+                    class='icon-btn'
+                    title={panelOpen() ? 'Hide menu' : 'Show menu'}
+                    aria-label={panelOpen() ? 'Hide menu' : 'Show menu'}
+                    onClick={() => setPanelOpen((o) => !o)}
+                >
+                    {panelOpen() ? <X size={18} /> : <Menu size={18} />}
+                </button>
                 <div class='brand'>
                     <span class='logo'>✦</span>
                     <span class='title'>Celestial&nbsp;Playground</span>
@@ -554,9 +598,10 @@ const App = () => {
                 setPresetOptions={setPresetOptions}
                 scale={metersPerPixel}
                 setScale={setMetersPerPixel}
+                open={panelOpen}
             />
 
-            <Toolbar running={running} zoom={zoom} measuring={measureMode} actions={actions} />
+            <Toolbar running={running} zoom={zoom} mode={mode} actions={actions} />
         </>
     )
 }

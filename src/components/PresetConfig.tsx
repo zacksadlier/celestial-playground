@@ -2,8 +2,8 @@ import { Show, For } from 'solid-js'
 import { Upload } from 'lucide-solid'
 import type { SetStoreFunction } from 'solid-js/store'
 import type { PresetName, PresetOptions } from '../presets'
-import type { StarSubtype } from '../types'
-import { subtypesForType, subtypeShortLabel } from '../units'
+import type { StarSubtype } from '../lib/types'
+import { subtypesForType, subtypeShortLabel } from '../lib/units'
 
 interface PresetConfigProps {
     name: PresetName
@@ -55,10 +55,19 @@ const PresetConfig = (props: PresetConfigProps) => {
                     <span>System</span>
                     <select
                         value={props.options.solar.mode}
-                        onChange={(e) => props.setOptions('solar', 'mode', e.currentTarget.value as 'ours' | 'random')}
+                        onChange={(e) =>
+                            props.setOptions(
+                                'solar',
+                                'mode',
+                                e.currentTarget.value as 'ours' | 'random' | 'alphaCentauri',
+                            )
+                        }
                     >
                         <option class='dropdown-option' value='ours'>
                             Our system
+                        </option>
+                        <option class='dropdown-option' value='alphaCentauri'>
+                            Alpha Centauri
                         </option>
                         <option class='dropdown-option' value='random'>
                             Random
@@ -67,6 +76,9 @@ const PresetConfig = (props: PresetConfigProps) => {
                 </label>
                 <Show when={props.options.solar.mode === 'random'}>
                     <p class='config-note'>Random star type & 2–15 planets each time.</p>
+                </Show>
+                <Show when={props.options.solar.mode === 'alphaCentauri'}>
+                    <p class='config-note'>The nearest triple system: the A–B binary plus Proxima & its planets.</p>
                 </Show>
             </Show>
 

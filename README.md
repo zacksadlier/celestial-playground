@@ -1,7 +1,7 @@
 # ✦ Celestial Playground
 
 A gravitational sandbox in the browser. Drop stars, planets, and black holes onto
-the canvas and watch them pull on each other under real Newtonian gravity — across
+the canvas and watch them pull on each other under real Newtonian gravity - across
 scales ranging from a single solar system to a pair of colliding galaxies.
 
 Built with [SolidJS](https://www.solidjs.com/), TypeScript, and Vite. The physics
@@ -10,24 +10,25 @@ backend.
 
 ## Features
 
-- **Interactive N-body gravity** — exact O(n²) pairwise forces with a small
+- **Interactive N-body gravity** - exact O(n²) pairwise forces with a small
   softening term, integrated with semi-implicit Euler and adaptive substepping so
   the simulation stays stable as you change the time scale.
-- **Drag to launch** — click empty space to drop a body at rest, or click-and-drag
+- **Drag to launch** - click empty space to drop a body at rest, or click-and-drag
   to launch it; the drag direction and length set the initial velocity.
-- **Body types** — terrestrial and gas-giant planets, main-sequence stars (O–M),
+- **Body types** - terrestrial and gas-giant planets, main-sequence stars (O–M),
   evolved/compact stars (white dwarf, red giant, neutron star), and black holes
   (optionally with a dark-matter halo). subType and rendering follow from mass.
-- **Collisions** — bodies can **merge** (conserving mass and momentum) or bounce
+- **Collisions** - bodies can **merge** (conserving mass and momentum) or bounce
   **elastically**, toggleable in the panel.
-- **Self-consistent physical units** — pick a length scale (metres per pixel) and
+- **Self-consistent physical units** - pick a length scale (metres per pixel) and
   playback speed (simulated time per real second). Hover any body to inspect its
   real mass, type, and velocity; use the **📏 Measure** tool to read true distances.
-- **Scene presets** — each with its own tunable options:
-    - **Binary** — two stars orbiting their barycentre (choose each star's class).
-    - **Solar** — our real solar system to scale, or a randomly generated system.
-    - **Cluster** — a swarm of bodies with random velocities.
-    - **Collision** — two galaxies on a gentle, bound approach that merge over time.
+- **Scene presets** - each with its own tunable options:
+    - **Binary** - two stars orbiting their barycentre (choose each star's class).
+    - **Solar** - our real solar system to scale, the nearby Alpha Centauri triple
+      system, or a randomly generated system.
+    - **Cluster** - a swarm of bodies with random velocities.
+    - **Collision** - two galaxies on a gentle, bound approach that merge over time.
 - **Pan, zoom, trails**, live stats (body count, total energy, FPS), and an
   in-app info modal.
 
@@ -81,6 +82,3 @@ src/
   styles.css           # App styling
 ```
 
-## License
-
-See [package.json](package.json). Source: <https://github.com/zacksadlier/celestial-playground>

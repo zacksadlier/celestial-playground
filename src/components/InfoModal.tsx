@@ -20,29 +20,52 @@ const InfoModal = (props: InfoModalProps) => {
                     each other in real Newtonian gravity across scales from a solar system to colliding galaxies.
                 </p>
 
-                <h3>Adding bodies</h3>
+                <h3>Interaction modes</h3>
+                <p class='modal-lead'>
+                    Pick a mode from the toolbar. The active mode is highlighted, and the cursor changes to match it.
+                </p>
                 <ul>
                     <li>
-                        <b>Click</b> empty space to drop a body at rest.
+                        <b>Body mode</b> (default): click empty space to drop a body at rest, or click and drag to launch
+                        it (drag direction and length set its velocity). Set the <b>type</b>, <b>subType</b>, and{' '}
+                        <b>mass</b> in the New Body panel first.
                     </li>
                     <li>
-                        <b>Click &amp; drag</b> to launch it, direction and length set the initial velocity.
+                        <b>Pan mode</b>: drag the canvas to move the view. You can still pin bodies (see below) with a
+                        plain click.
                     </li>
                     <li>
-                        Pick the <b>type</b>, <b>subType</b>, and <b>mass</b> in the New Body panel first.
+                        <b>Measure mode</b>: drag a line to read a distance, or pause and click two bodies to keep a
+                        ruler between them. With two bodies it also shows the gravitational force between them, and the
+                        line stays put after you resume.
+                    </li>
+                </ul>
+
+                <h3>Inspecting &amp; pinning</h3>
+                <ul>
+                    <li>
+                        <b>Hover</b> any body to see its mass, type, and velocity, plus its orbit (period, semi-major
+                        axis, eccentricity) when it is orbiting another body.
+                    </li>
+                    <li>
+                        <b>Click</b> a body to <b>pin</b> its tooltip so it stays on screen as the body moves. The pinned
+                        body gets a red outline, and its orbital path is drawn when it is in orbit.
+                    </li>
+                    <li>
+                        Only one body is pinned at a time. Click another body to switch, click the pinned body again to
+                        unpin, or click the tooltip itself to dismiss it. Pinning works in Body and Pan modes.
                     </li>
                 </ul>
 
                 <h3>Navigating</h3>
                 <ul>
                     <li>
-                        <b>Scroll</b> to zoom toward the cursor.
+                        <b>Scroll</b> to zoom toward the cursor. On a touchscreen, <b>pinch</b> to zoom and drag with two
+                        fingers to pan.
                     </li>
                     <li>
-                        <b>Right-drag</b> (or Shift-drag) to pan the view.
-                    </li>
-                    <li>
-                        <b>Hover</b> a body to inspect its mass, type, and velocity.
+                        <b>Right-drag</b> or <b>Shift-drag</b> pans in any mode, or use <b>Pan mode</b> for left-drag
+                        panning.
                     </li>
                 </ul>
 
@@ -53,15 +76,6 @@ const InfoModal = (props: InfoModalProps) => {
                     </li>
                     <li>
                         <b>Scale</b> sets real distance per pixel; <b>Speed</b> sets simulated time per second.
-                    </li>
-                    <li>
-                        <b>📏 Measure</b> draws a ruler. Just drag a line or pause and click two bodies.
-                        <ul>
-                            <li>
-                                Clicking two bodies will maintain the line between them even after clicking play. It
-                                will also display the force they exert on each other due to gravitation.
-                            </li>
-                        </ul>
                     </li>
                     <li>
                         <b>Presets</b> open options, then hit <b>Load Preset</b> to build the scene.
